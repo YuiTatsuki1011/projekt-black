@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
@@ -10,6 +10,7 @@
 [ext_resource type="PackedScene" path="res://scenes/ui/stamina_hud.tscn" id="8_stamina_hud"]
 [ext_resource type="PackedScene" path="res://scenes/interaction/item_grant_button.tscn" id="9_item_grant_button"]
 [ext_resource type="PackedScene" path="res://scenes/ui/inventory_screen.tscn" id="10_inventory_screen"]
+[ext_resource type="PackedScene" path="res://scenes/enemies/ranged_enemy.tscn" id="11_ranged_enemy"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_floor"]
 size = Vector2(1200, 24)
@@ -82,6 +83,11 @@ position = Vector2(470, 290)
 item_id = &"heavy_pistol"
 button_label = "HEAVY PISTOL"
 quantity = 1
+
+[node name="RangedEnemyButton" parent="." instance=ExtResource("4_spawn_button")]
+position = Vector2(610, 290)
+spawn_scene = ExtResource("11_ranged_enemy")
+button_label = "GUNNER"
 
 [node name="Crosshair" parent="." instance=ExtResource("2_crosshair")]
 

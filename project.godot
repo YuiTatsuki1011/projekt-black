@@ -82,6 +82,7 @@ inventory_toggle={
 2d_physics/layer_3="player_projectile"
 2d_physics/layer_4="enemy"
 2d_physics/layer_5="interaction"
+2d_physics/layer_6="enemy_projectile"
 
 [physics]
 

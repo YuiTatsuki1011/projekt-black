@@ -103,6 +103,7 @@ res://
 - Layer 3 `player_projectile`: プレイヤーの弾。
 - Layer 4 `enemy`: 敵。
 - Layer 5 `interaction`: Fキーで操作できるボタンなど。
+- Layer 6 `enemy_projectile`: 敵の弾。
 
 ## Combat Feedback
 
@@ -110,6 +111,7 @@ res://
 
 - `Health`: HP管理と、HP変化、被ダメージ、死亡の通知。
 - `Projectile`: 命中した相手の `Health` を探してダメージを与える。
+- `EnemyProjectile`: プレイヤーや床、壁に当たる敵弾。プレイヤーに当たると `Health` へダメージを与える。
 - `PlayerController`: 移動、照準、射撃、近接攻撃、ステップ、スタミナを扱う。
 - 敵スクリプト: 命中時の点滅、ノックバック、VFX生成、死亡処理を担当する。
 - `BurstVfx`: 仮の赤い破片演出。正式な血液スプライトに差し替える前の確認用。
@@ -174,3 +176,15 @@ res://
 - `RECOVERY`: 攻撃後に硬直する。
 
 遠距離攻撃やAOEは、将来的に弾道や範囲表示を出せる設計にします。
+
+## Enemy Ranged Attacks
+
+遠距離攻撃の最初の土台として、`RangedEnemy` と `EnemyProjectile` を追加しています。
+
+- `RangedEnemy`: プレイヤーを狙い、発射前に赤い射線を表示する。
+- `WINDUP`: 射線を表示し、狙いを固定する。プレイヤーはこの間に移動やステップで回避できる。
+- `FIRE`: 固定した方向へ `EnemyProjectile` を撃つ。
+- `RECOVERY`: 次弾まで硬直する。
+
+敵弾は `enemy_projectile` レイヤーに置き、`world` と `player` にだけ当たります。
+近接攻撃とは異なり、遠距離攻撃は弾道や範囲を見せて回避判断を作る方針です。
