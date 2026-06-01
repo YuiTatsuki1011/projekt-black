@@ -145,15 +145,16 @@ res://
 `Inventory` は、アイテムID、所持数、グリッド上の配置を記録する部品です。
 現在はプレイヤーの `Inventory` ノードで10x6マスのグリッドを管理し、`pistol_ammo` を2x1マスのアイテムとして配置します。
 アイテム定義は `resources/items/` に置いた `.tres` を起動時に読み込みます。武器アイテムとして `basic_pistol`、`heavy_pistol`、`field_knife` も定義済みです。
+グリッド上の各アイテムは、標準サイズとは別に現在の向きのサイズを持ちます。ドラッグ中にRキーで回転すると、置けた時だけその向きが保存されます。
 リロード時はグリッド上の `pistol_ammo` から弾薬を消費します。
 
 - `get_quantity(item_id)`: 指定アイテムの所持数を返す。
 - `add_item(item_id, quantity)`: アイテムを増やす。
 - `remove_item(item_id, quantity)`: 持っている分だけ減らし、実際に減らせた数を返す。
-- `move_entry(entry_id, position)`: グリッド上のアイテムを移動する。
-- `can_place(entry_id, position)`: 指定位置に置けるかを確認する。
+- `move_entry(entry_id, position, size_override)`: グリッド上のアイテムを移動し、必要なら向きも保存する。
+- `can_place(entry_id, position, size_override)`: 指定位置と向きで置けるかを確認する。
 - `can_add_item(item_id, quantity)`: 指定アイテムを収納する空きがあるかを確認する。
-- `add_item_at(item_id, quantity, position)`: 指定グリッド位置へ新しいアイテムを追加する。
+- `add_item_at(item_id, quantity, position, size_override)`: 指定グリッド位置と向きで新しいアイテムを追加する。
 
 `InventoryScreen` はTabキーで開くUIです。グリッドの描画とドラッグ移動を担当し、実際の配置判定は `Inventory` に任せます。
 現在は弾薬と武器アイテムに使っていますが、同じ入口を回復アイテム、素材、クエスト品へ広げられます。

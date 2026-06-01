@@ -76,12 +76,19 @@ func add_item(item_id: StringName, quantity: int) -> int:
 	return added_quantity
 
 
-func add_item_at(item_id: StringName, quantity: int, position: Vector2i) -> int:
+func add_item_at(
+	item_id: StringName,
+	quantity: int,
+	position: Vector2i,
+	size_override: Vector2i = Vector2i.ZERO
+) -> int:
 	if quantity <= 0:
 		return 0
 
 	var definition: Dictionary = get_item_definition(item_id)
 	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	if size_override.x > 0 and size_override.y > 0:
+		item_size = size_override
 	var is_stackable: bool = bool(definition.get("stackable", false))
 	var max_stack: int = int(definition.get("max_stack", 1))
 	var stack_quantity: int = mini(max_stack, quantity) if is_stackable else 1
@@ -228,12 +235,16 @@ func get_entry(entry_id: int) -> Dictionary:
 	return entry
 
 
-func can_place(entry_id: int, position: Vector2i) -> bool:
+func can_place(entry_id: int, position: Vector2i, size_override: Vector2i = Vector2i.ZERO) -> bool:
 	if not _entries.has(entry_id):
 		return false
 
 	var entry: Dictionary = _entries[entry_id]
-	return _is_area_free(position, entry.get("size", Vector2i.ONE), entry_id)
+	var item_size: Vector2i = entry.get("size", Vector2i.ONE)
+	if size_override.x > 0 and size_override.y > 0:
+		item_size = size_override
+
+	return _is_area_free(position, item_size, entry_id)
 
 
 func is_cell_free(cell: Vector2i, ignored_entry_id: int = -1) -> bool:
@@ -253,12 +264,14 @@ func is_cell_free(cell: Vector2i, ignored_entry_id: int = -1) -> bool:
 	return true
 
 
-func move_entry(entry_id: int, position: Vector2i) -> bool:
-	if not can_place(entry_id, position):
+func move_entry(entry_id: int, position: Vector2i, size_override: Vector2i = Vector2i.ZERO) -> bool:
+	if not can_place(entry_id, position, size_override):
 		return false
 
 	var entry: Dictionary = _entries[entry_id]
 	entry["position"] = position
+	if size_override.x > 0 and size_override.y > 0:
+		entry["size"] = size_override
 	_entries[entry_id] = entry
 	grid_changed.emit()
 	return true

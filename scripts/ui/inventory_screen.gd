@@ -47,6 +47,8 @@ var _drag_source: StringName = DRAG_SOURCE_NONE
 var _drag_entry_id: int = -1
 var _drag_equipment_slot: StringName = &""
 var _drag_item_id: StringName = &""
+var _drag_item_size: Vector2i = Vector2i.ONE
+var _drag_item_quantity: int = 1
 var _drag_cell_offset: Vector2i = Vector2i.ZERO
 var _drag_mouse_offset: Vector2 = Vector2.ZERO
 var _equipment_drag_node: Control
@@ -94,7 +96,10 @@ func _input(event: InputEvent) -> void:
 		return
 
 	if _is_dragging():
-		if event is InputEventMouseMotion:
+		if event.is_action_pressed("reload"):
+			_rotate_dragged_item()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventMouseMotion:
 			_update_drag_visual()
 			get_viewport().set_input_as_handled()
 		elif event is InputEventMouseButton:
@@ -163,8 +168,9 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	var size: Vector2i = entry.get("size", Vector2i.ONE)
 	var quantity: int = int(entry.get("quantity", 1))
 	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var display_size := _drag_item_size if is_dragged else size
 
-	var item_panel := _create_item_panel(definition, quantity, size, is_dragged)
+	var item_panel := _create_item_panel(definition, quantity, display_size, is_dragged)
 	item_panel.position = _grid_to_local(position)
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
@@ -228,6 +234,8 @@ func _begin_drag(entry_id: int) -> void:
 	var entry: Dictionary = _inventory.get_entry(entry_id)
 	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
 	_drag_item_id = entry.get("item_id", &"")
+	_drag_item_size = entry_size
+	_drag_item_quantity = int(entry.get("quantity", 1))
 	var local_mouse_position: Vector2 = item_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
 	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
 	_drag_cell_offset = Vector2i(
@@ -266,12 +274,12 @@ func _finish_drag() -> void:
 		if target_slot != &"":
 			_equip_inventory_entry_to_slot(_drag_entry_id, target_slot)
 		elif _is_mouse_inside_grid():
-			_inventory.move_entry(_drag_entry_id, target_cell)
+			_inventory.move_entry(_drag_entry_id, target_cell, _drag_item_size)
 		elif not _is_mouse_inside_inventory_frame():
 			_drop_dragged_inventory_entry_to_world()
 	elif _drag_source == DRAG_SOURCE_EQUIPMENT:
 		if _is_mouse_inside_grid():
-			_store_equipped_slot_at(_drag_equipment_slot, target_cell)
+			_store_equipped_slot_at(_drag_equipment_slot, target_cell, _drag_item_size)
 		elif not _is_mouse_inside_inventory_frame():
 			_drop_equipped_slot_to_world(_drag_equipment_slot)
 	_cancel_drag()
@@ -286,6 +294,8 @@ func _cancel_drag() -> void:
 	_drag_entry_id = -1
 	_drag_equipment_slot = &""
 	_drag_item_id = &""
+	_drag_item_size = Vector2i.ONE
+	_drag_item_quantity = 1
 	_drag_cell_offset = Vector2i.ZERO
 	_drag_mouse_offset = Vector2.ZERO
 	_equipment_drag_node = null
@@ -308,12 +318,50 @@ func _get_drag_node() -> Control:
 
 
 func _get_drag_item_size() -> Vector2i:
-	if _drag_source == DRAG_SOURCE_INVENTORY:
-		var entry: Dictionary = _inventory.get_entry(_drag_entry_id)
-		return entry.get("size", Vector2i.ONE)
+	return _drag_item_size
+
+
+func _rotate_dragged_item() -> void:
+	if not _is_dragging() or _drag_item_size.x == _drag_item_size.y:
+		return
+
+	var old_pixel_size := _entry_pixel_size(_drag_item_size)
+	var old_mouse_offset := _drag_mouse_offset
+	_drag_item_size = Vector2i(_drag_item_size.y, _drag_item_size.x)
+
+	var new_pixel_size := _entry_pixel_size(_drag_item_size)
+	_drag_mouse_offset = Vector2(
+		_get_scaled_drag_offset(old_mouse_offset.x, old_pixel_size.x, new_pixel_size.x),
+		_get_scaled_drag_offset(old_mouse_offset.y, old_pixel_size.y, new_pixel_size.y)
+	)
+	_drag_cell_offset = Vector2i(
+		clampi(floori(_drag_mouse_offset.x / CELL_PITCH), 0, _drag_item_size.x - 1),
+		clampi(floori(_drag_mouse_offset.y / CELL_PITCH), 0, _drag_item_size.y - 1)
+	)
+
+	_refresh_drag_item_node()
+	_update_drag_visual()
+
+
+func _get_scaled_drag_offset(offset: float, old_size: float, new_size: float) -> float:
+	if old_size <= 0.0:
+		return 0.0
+
+	return clampf((offset / old_size) * new_size, 0.0, new_size)
+
+
+func _refresh_drag_item_node() -> void:
+	var item_node := _get_drag_node()
+	if item_node == null or _inventory == null:
+		return
 
 	var definition: Dictionary = _inventory.get_item_definition(_drag_item_id)
-	return definition.get("size", Vector2i.ONE)
+	item_node.size = _entry_pixel_size(_drag_item_size)
+	for child in item_node.get_children():
+		if child is Label:
+			var label := child as Label
+			label.text = _get_item_label(definition, _drag_item_quantity, _drag_item_size)
+			break
 
 
 func _grid_to_local(grid_position: Vector2i) -> Vector2:
@@ -634,6 +682,8 @@ func _begin_equipment_drag(slot: StringName) -> void:
 	_drag_entry_id = -1
 	_drag_equipment_slot = slot
 	_drag_item_id = item_id
+	_drag_item_size = item_size
+	_drag_item_quantity = 1
 	_drag_cell_offset = Vector2i.ZERO
 	_drag_mouse_offset = Vector2(
 		clampf(local_mouse_position.x, 0.0, drag_size.x),
@@ -670,7 +720,7 @@ func _store_equipped_slot(slot: StringName) -> bool:
 	return true
 
 
-func _store_equipped_slot_at(slot: StringName, target_cell: Vector2i) -> bool:
+func _store_equipped_slot_at(slot: StringName, target_cell: Vector2i, item_size: Vector2i) -> bool:
 	if _inventory == null or _equipment == null:
 		return false
 
@@ -678,7 +728,7 @@ func _store_equipped_slot_at(slot: StringName, target_cell: Vector2i) -> bool:
 	if item_id == &"":
 		return false
 
-	var added_quantity: int = _inventory.add_item_at(item_id, 1, target_cell)
+	var added_quantity: int = _inventory.add_item_at(item_id, 1, target_cell, item_size)
 	if added_quantity <= 0:
 		_show_warning("NO SPACE")
 		return false
@@ -777,7 +827,12 @@ func _show_entry_details(entry_id: int) -> void:
 
 	_hover_entry_id = entry_id
 	_hover_equipment_slot = &""
-	_show_item_details(entry.get("item_id", &""), int(entry.get("quantity", 1)), true)
+	_show_item_details(
+		entry.get("item_id", &""),
+		int(entry.get("quantity", 1)),
+		true,
+		entry.get("size", Vector2i.ONE)
+	)
 
 
 func _show_equipment_slot_details(slot: StringName) -> void:
@@ -794,7 +849,12 @@ func _show_equipment_slot_details(slot: StringName) -> void:
 	_show_item_details(item_id, 1, false)
 
 
-func _show_item_details(item_id: StringName, quantity: int, compare_to_equipped: bool) -> void:
+func _show_item_details(
+	item_id: StringName,
+	quantity: int,
+	compare_to_equipped: bool,
+	display_size: Vector2i = Vector2i.ZERO
+) -> void:
 	if item_id == &"" or _inventory == null:
 		_hide_detail_panel()
 		return
@@ -809,7 +869,15 @@ func _show_item_details(item_id: StringName, quantity: int, compare_to_equipped:
 			compare_weapon = _get_equipped_weapon_for_slot(compare_slot)
 
 	_ensure_detail_panel()
-	_populate_item_detail_card(_selected_detail_rows, "Selected", item_id, quantity, weapon, compare_weapon)
+	_populate_item_detail_card(
+		_selected_detail_rows,
+		"Selected",
+		item_id,
+		quantity,
+		weapon,
+		compare_weapon,
+		display_size
+	)
 
 	var should_show_equipped := compare_to_equipped and weapon != null and compare_slot != &""
 	_set_equipped_detail_visible(should_show_equipped)
@@ -932,7 +1000,8 @@ func _populate_item_detail_card(
 	item_id: StringName,
 	quantity: int,
 	weapon: Resource,
-	compare_weapon: Resource
+	compare_weapon: Resource,
+	display_size: Vector2i = Vector2i.ZERO
 ) -> void:
 	var previous_rows := _detail_rows
 	_detail_rows = target_rows
@@ -943,7 +1012,7 @@ func _populate_item_detail_card(
 	_add_detail_title(_get_detail_display_name(definition, weapon))
 	if card_label == "Equipped" and weapon != null:
 		_add_equipped_badge()
-	_add_detail_note("%s  |  %s" % [card_label, _get_detail_type_line(definition, item_type)])
+	_add_detail_note("%s  |  %s" % [card_label, _get_detail_type_line(definition, item_type, display_size)])
 	_add_detail_separator()
 
 	if quantity > 1:
@@ -954,7 +1023,7 @@ func _populate_item_detail_card(
 	elif weapon != null and item_type == &"melee_weapon":
 		_populate_melee_weapon_details(weapon, compare_weapon)
 	else:
-		_populate_generic_item_details(definition, quantity)
+		_populate_generic_item_details(definition, quantity, display_size)
 
 	_detail_rows = previous_rows
 
@@ -1054,8 +1123,12 @@ func _populate_melee_weapon_details(weapon: Resource, compare_weapon: Resource) 
 	)
 
 
-func _populate_generic_item_details(definition: Dictionary, quantity: int) -> void:
-	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+func _populate_generic_item_details(
+	definition: Dictionary,
+	quantity: int,
+	display_size: Vector2i = Vector2i.ZERO
+) -> void:
+	var item_size: Vector2i = _resolve_display_size(definition, display_size)
 	_add_detail_stat_row("Grid Size", "%dx%d" % [item_size.x, item_size.y])
 	_add_detail_stat_row("Stackable", "Yes" if bool(definition.get("stackable", false)) else "No")
 	if bool(definition.get("stackable", false)):
@@ -1156,8 +1229,12 @@ func _get_detail_display_name(definition: Dictionary, weapon: Resource) -> Strin
 	return str(definition.get("name", "Item"))
 
 
-func _get_detail_type_line(definition: Dictionary, item_type: StringName) -> String:
-	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+func _get_detail_type_line(
+	definition: Dictionary,
+	item_type: StringName,
+	display_size: Vector2i = Vector2i.ZERO
+) -> String:
+	var item_size: Vector2i = _resolve_display_size(definition, display_size)
 	var type_name := "Item"
 	if item_type == &"ranged_weapon":
 		type_name = "Sidearm"
@@ -1167,6 +1244,13 @@ func _get_detail_type_line(definition: Dictionary, item_type: StringName) -> Str
 		type_name = "Stack"
 
 	return "%s  |  %dx%d" % [type_name, item_size.x, item_size.y]
+
+
+func _resolve_display_size(definition: Dictionary, display_size: Vector2i) -> Vector2i:
+	if display_size.x > 0 and display_size.y > 0:
+		return display_size
+
+	return definition.get("size", Vector2i.ONE)
 
 
 func _get_slot_display_name(slot: StringName) -> String:
