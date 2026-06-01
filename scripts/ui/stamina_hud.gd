@@ -28,7 +28,10 @@ func _ready() -> void:
 	var current := float(player.get("current_stamina"))
 	var maximum := float(player.get("max_stamina"))
 	var overheated := bool(player.get("is_stamina_overheated"))
-	var minimum := float(player.get("melee_min_stamina_to_use"))
+	var minimum_value: Variant = player.get("melee_min_stamina_to_use")
+	var minimum := 0.0
+	if minimum_value != null:
+		minimum = float(minimum_value)
 	_update_value(current, maximum, overheated, current >= minimum and not overheated)
 
 

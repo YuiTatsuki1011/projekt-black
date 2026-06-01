@@ -1,0 +1,40 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/interaction/item_grant_button.gd" id="1_item_grant_button"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_button"]
+size = Vector2(58, 30)
+
+[node name="ItemGrantButton" type="Area2D"]
+collision_layer = 16
+collision_mask = 0
+script = ExtResource("1_item_grant_button")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_button")
+
+[node name="Base" type="Polygon2D" parent="."]
+color = Color(0.16, 0.18, 0.2, 1)
+polygon = PackedVector2Array(-29, -15, 29, -15, 29, 15, -29, 15)
+
+[node name="Plate" type="Polygon2D" parent="."]
+color = Color(0.18, 0.38, 0.46, 1)
+polygon = PackedVector2Array(-20, -8, 20, -8, 20, 8, -20, 8)
+
+[node name="Label" type="Label" parent="."]
+offset_left = -46.0
+offset_top = -38.0
+offset_right = 46.0
+offset_bottom = -18.0
+theme_override_font_sizes/font_size = 10
+text = "AMMO"
+horizontal_alignment = 1
+
+[node name="Prompt" type="Label" parent="."]
+offset_left = -34.0
+offset_top = 18.0
+offset_right = 34.0
+offset_bottom = 34.0
+theme_override_font_sizes/font_size = 9
+text = "W"
+horizontal_alignment = 1

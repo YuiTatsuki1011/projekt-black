@@ -24,6 +24,7 @@ enum MeleeState {
 @export var bullet_damage: int = 10
 @export var magazine_size: int = 6
 @export var starting_reserve_ammo: int = 24
+@export var ammo_item_id: StringName = &"pistol_ammo"
 @export var reload_time: float = 1.2
 @export var fire_cooldown: float = 0.22
 @export var recoil_amount: float = 0.18
@@ -64,6 +65,7 @@ enum MeleeState {
 @onready var crouching_collision: CollisionShape2D = $CrouchingCollision
 @onready var interaction_area: Area2D = $InteractionArea
 @onready var health: Node = $Health
+@onready var inventory: Node = $Inventory
 @onready var melee_root: Node2D = $MeleeRoot
 @onready var melee_hit_area: Area2D = $MeleeRoot/MeleeHitArea
 @onready var melee_slash_visual: Polygon2D = $MeleeRoot/SlashVisual
@@ -98,13 +100,17 @@ var _dodge_timer: float = 0.0
 var _dodge_cooldown_remaining: float = 0.0
 var _dodge_direction: int = 1
 var _afterimage_timer: float = 0.0
+var _suppress_inventory_ammo_signal: bool = false
 
 
 func _ready() -> void:
 	if ProjectSettings.has_setting("physics/2d/default_gravity"):
 		_gravity = float(ProjectSettings.get_setting("physics/2d/default_gravity"))
 	current_ammo = magazine_size
-	reserve_ammo = starting_reserve_ammo
+	inventory.item_quantity_changed.connect(_on_inventory_item_quantity_changed)
+	if inventory.get_quantity(ammo_item_id) <= 0 and starting_reserve_ammo > 0:
+		inventory.add_item(ammo_item_id, starting_reserve_ammo)
+	_sync_reserve_ammo(false)
 	current_stamina = max_stamina
 	_configure_aim_bones()
 	health.damaged.connect(_on_damaged)
@@ -300,14 +306,14 @@ func _start_reload() -> void:
 
 func _finish_reload() -> void:
 	var ammo_needed: int = magazine_size - current_ammo
-	var ammo_to_load: int = ammo_needed
-	if reserve_ammo < ammo_to_load:
-		ammo_to_load = reserve_ammo
+	var ammo_to_load: int = mini(inventory.get_quantity(ammo_item_id), ammo_needed)
 	current_ammo += ammo_to_load
-	reserve_ammo -= ammo_to_load
+	_suppress_inventory_ammo_signal = true
+	inventory.remove_item(ammo_item_id, ammo_to_load)
+	_suppress_inventory_ammo_signal = false
 	_is_reloading = false
 	_reload_remaining = 0.0
-	ammo_changed.emit(current_ammo, reserve_ammo)
+	_sync_reserve_ammo()
 
 
 func _update_dodge(delta: float) -> void:
@@ -578,6 +584,19 @@ func _consume_round() -> void:
 	_recoil = recoil_amount
 	fired.emit(current_ammo)
 	ammo_changed.emit(current_ammo, reserve_ammo)
+
+
+func _sync_reserve_ammo(should_emit: bool = true) -> void:
+	reserve_ammo = inventory.get_quantity(ammo_item_id)
+	if should_emit:
+		ammo_changed.emit(current_ammo, reserve_ammo)
+
+
+func _on_inventory_item_quantity_changed(item_id: StringName, _quantity: int) -> void:
+	if item_id != ammo_item_id:
+		return
+
+	_sync_reserve_ammo(not _suppress_inventory_ammo_signal)
 
 
 func _try_apply_close_barrel_hit() -> bool:
