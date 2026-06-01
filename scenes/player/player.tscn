@@ -1,9 +1,11 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=12 format=3]
 
 [ext_resource type="Script" path="res://scripts/player/player_controller.gd" id="1_player_controller"]
 [ext_resource type="PackedScene" path="res://scenes/weapons/projectile.tscn" id="2_projectile"]
 [ext_resource type="Script" path="res://scripts/combat/health.gd" id="3_health"]
 [ext_resource type="PackedScene" path="res://scenes/ui/health_indicator.tscn" id="4_health_indicator"]
+[ext_resource type="PackedScene" path="res://scenes/vfx/player_afterimage.tscn" id="5_afterimage"]
+[ext_resource type="PackedScene" path="res://scenes/vfx/player_bleed.tscn" id="6_player_bleed"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_standing"]
 size = Vector2(18, 42)
@@ -14,11 +16,16 @@ size = Vector2(20, 26)
 [sub_resource type="CircleShape2D" id="CircleShape2D_interaction"]
 radius = 54.0
 
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_melee"]
+size = Vector2(56, 34)
+
 [node name="Player" type="CharacterBody2D"]
 collision_layer = 2
 collision_mask = 9
 script = ExtResource("1_player_controller")
 projectile_scene = ExtResource("2_projectile")
+afterimage_scene = ExtResource("5_afterimage")
+player_bleed_vfx_scene = ExtResource("6_player_bleed")
 
 [node name="StandingCollision" type="CollisionShape2D" parent="."]
 position = Vector2(0, -21)
@@ -115,6 +122,24 @@ position = Vector2(18, 0)
 position = Vector2(18, 0)
 rest = Transform2D(1, 0, 0, 1, 18, 0)
 auto_calculate_length_and_angle = false
+
+[node name="MeleeRoot" type="Node2D" parent="."]
+visible = false
+position = Vector2(0, -22)
+
+[node name="MeleeHitArea" type="Area2D" parent="MeleeRoot"]
+collision_layer = 0
+collision_mask = 8
+monitoring = false
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="MeleeRoot/MeleeHitArea"]
+position = Vector2(30, 0)
+shape = SubResource("RectangleShape2D_melee")
+
+[node name="SlashVisual" type="Polygon2D" parent="MeleeRoot"]
+visible = false
+color = Color(0.92, 0.82, 0.55, 0.72)
+polygon = PackedVector2Array(8, -20, 60, -8, 60, 8, 8, 20, 22, 0)
 
 [node name="Camera2D" type="Camera2D" parent="."]
 position = Vector2(0, -22)

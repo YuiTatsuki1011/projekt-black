@@ -1,0 +1,23 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/combat/afterimage_vfx.gd" id="1_afterimage_vfx"]
+
+[node name="PlayerAfterimage" type="Node2D"]
+modulate = Color(0.55, 0.6, 0.68, 0.34)
+script = ExtResource("1_afterimage_vfx")
+lifetime = 0.2
+
+[node name="Body" type="Polygon2D" parent="."]
+position = Vector2(0, -18)
+color = Color(0.42, 0.48, 0.58, 1)
+polygon = PackedVector2Array(-8, -16, 8, -16, 10, 16, -10, 16)
+
+[node name="Head" type="Polygon2D" parent="."]
+position = Vector2(0, -42)
+color = Color(0.42, 0.48, 0.58, 1)
+polygon = PackedVector2Array(-6, -6, 6, -6, 7, 5, -7, 5)
+
+[node name="Legs" type="Polygon2D" parent="."]
+position = Vector2(0, 1)
+color = Color(0.32, 0.36, 0.44, 1)
+polygon = PackedVector2Array(-8, 0, -2, 0, -2, 18, -8, 18, 2, 0, 8, 0, 8, 18, 2, 18)
