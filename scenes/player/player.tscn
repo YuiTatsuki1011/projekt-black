@@ -1,7 +1,9 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="Script" path="res://scripts/player/player_controller.gd" id="1_player_controller"]
 [ext_resource type="PackedScene" path="res://scenes/weapons/projectile.tscn" id="2_projectile"]
+[ext_resource type="Script" path="res://scripts/combat/health.gd" id="3_health"]
+[ext_resource type="PackedScene" path="res://scenes/ui/health_indicator.tscn" id="4_health_indicator"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_standing"]
 size = Vector2(18, 42)
@@ -9,9 +11,12 @@ size = Vector2(18, 42)
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_crouching"]
 size = Vector2(20, 26)
 
+[sub_resource type="CircleShape2D" id="CircleShape2D_interaction"]
+radius = 54.0
+
 [node name="Player" type="CharacterBody2D"]
-collision_layer = 1
-collision_mask = 1
+collision_layer = 2
+collision_mask = 9
 script = ExtResource("1_player_controller")
 projectile_scene = ExtResource("2_projectile")
 
@@ -23,6 +28,22 @@ shape = SubResource("RectangleShape2D_standing")
 position = Vector2(0, -13)
 shape = SubResource("RectangleShape2D_crouching")
 disabled = true
+
+[node name="InteractionArea" type="Area2D" parent="."]
+position = Vector2(0, -20)
+collision_layer = 0
+collision_mask = 16
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="InteractionArea"]
+shape = SubResource("CircleShape2D_interaction")
+
+[node name="Health" type="Node" parent="."]
+script = ExtResource("3_health")
+max_health = 100
+current_health = 100
+
+[node name="HealthIndicator" parent="." instance=ExtResource("4_health_indicator")]
+position = Vector2(0, -62)
 
 [node name="VisualRoot" type="Node2D" parent="."]
 
@@ -98,5 +119,5 @@ auto_calculate_length_and_angle = false
 [node name="Camera2D" type="Camera2D" parent="."]
 position = Vector2(0, -22)
 enabled = true
-zoom = Vector2(3, 3)
+zoom = Vector2(2.3, 2.3)
 position_smoothing_enabled = false

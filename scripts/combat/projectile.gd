@@ -29,4 +29,15 @@ func _physics_process(delta: float) -> void:
 
 
 func _on_body_entered(_body: Node) -> void:
+	var health: Node = _find_health(_body)
+	if health != null:
+		health.apply_damage(damage)
+
 	queue_free()
+
+
+func _find_health(node: Node) -> Node:
+	if node == null:
+		return null
+
+	return node.get_node_or_null("Health")

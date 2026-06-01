@@ -1,0 +1,35 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/training_target.gd" id="1_training_target"]
+[ext_resource type="Script" path="res://scripts/combat/health.gd" id="2_health"]
+[ext_resource type="PackedScene" path="res://scenes/ui/health_indicator.tscn" id="3_health_indicator"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_target"]
+size = Vector2(24, 48)
+
+[node name="TrainingTarget" type="StaticBody2D"]
+collision_layer = 8
+collision_mask = 1
+script = ExtResource("1_training_target")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+position = Vector2(0, -24)
+shape = SubResource("RectangleShape2D_target")
+
+[node name="BodyVisual" type="Polygon2D" parent="."]
+position = Vector2(0, -24)
+color = Color(0.42, 0.11, 0.13, 1)
+polygon = PackedVector2Array(-12, -24, 12, -24, 12, 24, -12, 24)
+
+[node name="Mark" type="Polygon2D" parent="."]
+position = Vector2(0, -24)
+color = Color(0.88, 0.68, 0.48, 1)
+polygon = PackedVector2Array(-8, -4, 8, -4, 8, 4, -8, 4, -4, -12, 4, -12, 4, 12, -4, 12)
+
+[node name="Health" type="Node" parent="."]
+script = ExtResource("2_health")
+max_health = 60
+current_health = 60
+
+[node name="HealthIndicator" parent="." instance=ExtResource("3_health_indicator")]
+position = Vector2(0, -58)

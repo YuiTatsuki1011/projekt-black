@@ -14,10 +14,12 @@ res://
     player/
     enemies/
     weapons/
+    interaction/
     levels/
     ui/
   scripts/
     player/
+    enemies/
     core/
     combat/
     ui/
@@ -45,6 +47,7 @@ res://
 - `scenes/player/`: プレイヤー本体と関連部品。
 - `scenes/enemies/`: 敵キャラクター。
 - `scenes/weapons/`: 銃や近接武器の見た目、発射位置。
+- `scenes/interaction/`: ボタン、ドア、アイテムなど、Wキーで操作できる部品。
 - `scenes/levels/`: テストマップや部屋。
 - `scenes/ui/`: HUD、メニュー、インベントリ画面。
 
@@ -54,6 +57,7 @@ res://
 
 - `scripts/core/`: 共通処理。
 - `scripts/player/`: プレイヤーの移動、照準、入力処理。
+- `scripts/enemies/`: 敵の移動、攻撃、死亡処理。
 - `scripts/combat/`: ダメージ、弾、武器、命中処理。
 - `scripts/ui/`: 照準、HUD、メニューなどの表示処理。
 - `scripts/inventory/`: アイテム所持、装備。
@@ -84,3 +88,13 @@ res://
 - `EventBus`: 離れたシステム同士の通知。
 
 最初の縦切りでは、必要になるまでAutoloadを増やしません。
+
+## Collision Layers
+
+`Collision Layer` は「その物体が何者か」、`Collision Mask` は「何に当たるか」を表す設定です。
+
+- Layer 1 `world`: 床、壁。
+- Layer 2 `player`: プレイヤー。
+- Layer 3 `player_projectile`: プレイヤーの弾。
+- Layer 4 `enemy`: 敵。
+- Layer 5 `interaction`: Wキーで操作できるボタンなど。

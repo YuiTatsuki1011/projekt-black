@@ -5,6 +5,7 @@ signal ammo_changed(current_ammo: int, reserve_ammo: int)
 signal fired(ammo_remaining: int)
 signal reload_started(duration: float)
 signal interact_requested
+signal died
 
 @export var walk_speed: float = 160.0
 @export var crouch_speed_multiplier: float = 0.45
@@ -26,6 +27,8 @@ signal interact_requested
 @onready var muzzle: Marker2D = $ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone/GunRoot/Muzzle
 @onready var standing_collision: CollisionShape2D = $StandingCollision
 @onready var crouching_collision: CollisionShape2D = $CrouchingCollision
+@onready var interaction_area: Area2D = $InteractionArea
+@onready var health: Node = $Health
 
 var current_ammo: int = 0
 var reserve_ammo: int = 0
@@ -35,8 +38,10 @@ var _fire_cooldown_remaining: float = 0.0
 var _reload_remaining: float = 0.0
 var _is_reloading: bool = false
 var _is_crouching: bool = false
+var _is_dead: bool = false
 var _facing: int = 1
 var _recoil: float = 0.0
+var _nearby_interactables: Array[Node2D] = []
 
 
 func _ready() -> void:
@@ -45,12 +50,18 @@ func _ready() -> void:
 	current_ammo = magazine_size
 	reserve_ammo = starting_reserve_ammo
 	_configure_aim_bones()
+	health.died.connect(_on_died)
+	interaction_area.area_entered.connect(_on_interaction_area_entered)
+	interaction_area.area_exited.connect(_on_interaction_area_exited)
 	_set_crouching(false)
 	_update_arm_anchor()
 	ammo_changed.emit(current_ammo, reserve_ammo)
 
 
 func _physics_process(delta: float) -> void:
+	if _is_dead:
+		return
+
 	_update_timers(delta)
 	_handle_movement(delta)
 	move_and_slide()
@@ -91,6 +102,7 @@ func _handle_movement(delta: float) -> void:
 
 func _handle_actions() -> void:
 	if Input.is_action_just_pressed("interact"):
+		_interact_with_nearest()
 		interact_requested.emit()
 
 	if Input.is_action_just_pressed("reload"):
@@ -212,3 +224,37 @@ func _configure_aim_bones() -> void:
 	hand_bone.set_autocalculate_length_and_angle(false)
 	hand_bone.set_length(30.0)
 	hand_bone.set_bone_angle(0.0)
+
+
+func _interact_with_nearest() -> void:
+	var nearest: Node2D = null
+	var nearest_distance_squared: float = INF
+
+	for interactable in _nearby_interactables:
+		if not is_instance_valid(interactable):
+			continue
+
+		var distance_squared: float = global_position.distance_squared_to(interactable.global_position)
+		if distance_squared < nearest_distance_squared:
+			nearest = interactable
+			nearest_distance_squared = distance_squared
+
+	if nearest != null and nearest.has_method("interact"):
+		nearest.call("interact", self)
+
+
+func _on_interaction_area_entered(area: Area2D) -> void:
+	if area.has_method("interact") and area not in _nearby_interactables:
+		_nearby_interactables.append(area)
+
+
+func _on_interaction_area_exited(area: Area2D) -> void:
+	_nearby_interactables.erase(area)
+
+
+func _on_died() -> void:
+	_is_dead = true
+	velocity = Vector2.ZERO
+	body_root.modulate = Color(0.35, 0.35, 0.35, 1.0)
+	arm_rig.visible = false
+	died.emit()

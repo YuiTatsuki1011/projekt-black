@@ -1,0 +1,29 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/ui/health_indicator.gd" id="1_health_indicator"]
+
+[node name="HealthIndicator" type="Node2D"]
+script = ExtResource("1_health_indicator")
+
+[node name="BarBackground" type="ColorRect" parent="."]
+offset_left = -21.0
+offset_top = -6.0
+offset_right = 21.0
+offset_bottom = -1.0
+color = Color(0.02, 0.02, 0.02, 0.85)
+mouse_filter = 2
+
+[node name="Fill" type="ColorRect" parent="BarBackground"]
+offset_right = 42.0
+offset_bottom = 5.0
+color = Color(0.72, 0.08, 0.08, 1)
+mouse_filter = 2
+
+[node name="ValueLabel" type="Label" parent="."]
+offset_left = -28.0
+offset_top = -22.0
+offset_right = 28.0
+offset_bottom = -8.0
+theme_override_font_sizes/font_size = 9
+text = "100/100"
+horizontal_alignment = 1
