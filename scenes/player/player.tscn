@@ -1,4 +1,4 @@
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=16 format=3]
 
 [ext_resource type="Script" path="res://scripts/player/player_controller.gd" id="1_player_controller"]
 [ext_resource type="PackedScene" path="res://scenes/weapons/projectile.tscn" id="2_projectile"]
@@ -7,6 +7,9 @@
 [ext_resource type="PackedScene" path="res://scenes/vfx/player_afterimage.tscn" id="5_afterimage"]
 [ext_resource type="PackedScene" path="res://scenes/vfx/player_bleed.tscn" id="6_player_bleed"]
 [ext_resource type="Script" path="res://scripts/inventory/inventory.gd" id="7_inventory"]
+[ext_resource type="Script" path="res://scripts/inventory/player_equipment.gd" id="8_equipment"]
+[ext_resource type="Resource" path="res://resources/weapons/basic_pistol.tres" id="9_basic_pistol"]
+[ext_resource type="Resource" path="res://resources/weapons/field_knife.tres" id="10_field_knife"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_standing"]
 size = Vector2(18, 42)
@@ -49,6 +52,11 @@ shape = SubResource("CircleShape2D_interaction")
 script = ExtResource("3_health")
 max_health = 100
 current_health = 100
+
+[node name="Equipment" type="Node" parent="."]
+script = ExtResource("8_equipment")
+ranged_weapon = ExtResource("9_basic_pistol")
+melee_weapon = ExtResource("10_field_knife")
 
 [node name="Inventory" type="Node" parent="."]
 script = ExtResource("7_inventory")

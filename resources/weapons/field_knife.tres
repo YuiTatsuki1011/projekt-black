@@ -1,0 +1,16 @@
+[gd_resource type="Resource" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/combat/melee_weapon_data.gd" id="1_melee_weapon_data"]
+
+[resource]
+script = ExtResource("1_melee_weapon_data")
+weapon_id = &"field_knife"
+display_name = "Field Knife"
+combo_damages = PackedInt32Array(34, 48, 68)
+stamina_cost = 30.0
+min_stamina_to_use = 15.0
+lunge_speed = 250.0
+lunge_time = 0.13
+strike_time = 0.11
+recovery_time = 0.2
+combo_reset_time = 0.75

@@ -66,6 +66,7 @@ enum MeleeState {
 @onready var interaction_area: Area2D = $InteractionArea
 @onready var health: Node = $Health
 @onready var inventory: Node = $Inventory
+@onready var equipment: Node = get_node_or_null("Equipment")
 @onready var melee_root: Node2D = $MeleeRoot
 @onready var melee_hit_area: Area2D = $MeleeRoot/MeleeHitArea
 @onready var melee_slash_visual: Polygon2D = $MeleeRoot/SlashVisual
@@ -101,12 +102,16 @@ var _dodge_cooldown_remaining: float = 0.0
 var _dodge_direction: int = 1
 var _afterimage_timer: float = 0.0
 var _suppress_inventory_ammo_signal: bool = false
+var _melee_combo_damages: PackedInt32Array = PackedInt32Array([34, 48, 68])
 
 
 func _ready() -> void:
 	if ProjectSettings.has_setting("physics/2d/default_gravity"):
 		_gravity = float(ProjectSettings.get_setting("physics/2d/default_gravity"))
+	_apply_equipment_stats()
 	current_ammo = magazine_size
+	if equipment != null and equipment.has_signal("equipment_changed"):
+		equipment.connect("equipment_changed", Callable(self, "_on_equipment_changed"))
 	inventory.item_quantity_changed.connect(_on_inventory_item_quantity_changed)
 	if inventory.get_quantity(ammo_item_id) <= 0 and starting_reserve_ammo > 0:
 		inventory.add_item(ammo_item_id, starting_reserve_ammo)
@@ -122,6 +127,72 @@ func _ready() -> void:
 	_update_arm_anchor()
 	ammo_changed.emit(current_ammo, reserve_ammo)
 	_emit_stamina_changed()
+
+
+func _apply_equipment_stats() -> void:
+	if equipment == null:
+		return
+
+	if equipment.has_method("get_ranged_weapon"):
+		var ranged_weapon: Resource = equipment.call("get_ranged_weapon") as Resource
+		if ranged_weapon != null:
+			_apply_ranged_weapon_stats(ranged_weapon)
+
+	if equipment.has_method("get_melee_weapon"):
+		var melee_weapon: Resource = equipment.call("get_melee_weapon") as Resource
+		if melee_weapon != null:
+			_apply_melee_weapon_stats(melee_weapon)
+
+
+func _apply_ranged_weapon_stats(ranged_weapon: Resource) -> void:
+	bullet_damage = int(_get_resource_value(ranged_weapon, &"damage", bullet_damage))
+	magazine_size = int(_get_resource_value(ranged_weapon, &"magazine_size", magazine_size))
+	starting_reserve_ammo = int(_get_resource_value(ranged_weapon, &"starting_reserve_ammo", starting_reserve_ammo))
+	ammo_item_id = StringName(_get_resource_value(ranged_weapon, &"ammo_item_id", ammo_item_id))
+	reload_time = float(_get_resource_value(ranged_weapon, &"reload_time", reload_time))
+	fire_cooldown = float(_get_resource_value(ranged_weapon, &"fire_cooldown", fire_cooldown))
+	recoil_amount = float(_get_resource_value(ranged_weapon, &"recoil_amount", recoil_amount))
+	recoil_recovery_speed = float(_get_resource_value(ranged_weapon, &"recoil_recovery_speed", recoil_recovery_speed))
+	var next_projectile_scene: PackedScene = _get_resource_value(ranged_weapon, &"projectile_scene", projectile_scene) as PackedScene
+	if next_projectile_scene != null:
+		projectile_scene = next_projectile_scene
+
+
+func _apply_melee_weapon_stats(melee_weapon: Resource) -> void:
+	var next_combo_damages: Variant = _get_resource_value(melee_weapon, &"combo_damages", _melee_combo_damages)
+	if next_combo_damages is PackedInt32Array:
+		_melee_combo_damages = next_combo_damages
+	melee_stamina_cost = float(_get_resource_value(melee_weapon, &"stamina_cost", melee_stamina_cost))
+	melee_min_stamina_to_use = float(_get_resource_value(melee_weapon, &"min_stamina_to_use", melee_min_stamina_to_use))
+	melee_lunge_speed = float(_get_resource_value(melee_weapon, &"lunge_speed", melee_lunge_speed))
+	melee_lunge_time = float(_get_resource_value(melee_weapon, &"lunge_time", melee_lunge_time))
+	melee_strike_time = float(_get_resource_value(melee_weapon, &"strike_time", melee_strike_time))
+	melee_recovery_time = float(_get_resource_value(melee_weapon, &"recovery_time", melee_recovery_time))
+	melee_combo_reset_time = float(_get_resource_value(melee_weapon, &"combo_reset_time", melee_combo_reset_time))
+
+
+func _get_resource_value(resource: Resource, property_name: StringName, fallback: Variant) -> Variant:
+	var value: Variant = resource.get(property_name)
+	if value == null:
+		return fallback
+
+	return value
+
+
+func _on_equipment_changed(slot: StringName) -> void:
+	_apply_equipment_stats()
+
+	if slot == &"ranged":
+		current_ammo = mini(current_ammo, magazine_size)
+		_is_reloading = false
+		_reload_remaining = 0.0
+		_sync_reserve_ammo()
+
+	if slot == &"melee":
+		_melee_combo_step = 0
+		_current_melee_step = 0
+		_queued_melee_attack = false
+		_emit_stamina_changed()
 
 
 func _physics_process(delta: float) -> void:
@@ -391,7 +462,7 @@ func _handle_melee_input() -> void:
 		if _melee_combo_reset_remaining <= 0.0:
 			_melee_combo_step = 0
 		_try_start_melee_attack()
-	elif (_melee_state == MeleeState.STRIKE or _melee_state == MeleeState.RECOVERY) and _melee_combo_step <= 2:
+	elif (_melee_state == MeleeState.STRIKE or _melee_state == MeleeState.RECOVERY) and _melee_combo_step < _get_melee_combo_count():
 		_queued_melee_attack = true
 
 
@@ -403,7 +474,7 @@ func _try_start_melee_attack() -> void:
 		stamina_use_failed.emit()
 		return
 
-	_current_melee_step = clampi(_melee_combo_step, 0, 2)
+	_current_melee_step = clampi(_melee_combo_step, 0, _get_melee_combo_count() - 1)
 	_melee_combo_step = _current_melee_step + 1
 	_melee_combo_reset_remaining = melee_combo_reset_time
 	_queued_melee_attack = false
@@ -452,13 +523,13 @@ func _enter_melee_recovery() -> void:
 func _finish_melee_recovery() -> void:
 	_set_melee_visual(false)
 
-	if _queued_melee_attack and _melee_combo_step <= 2 and not is_stamina_overheated:
+	if _queued_melee_attack and _melee_combo_step < _get_melee_combo_count() and not is_stamina_overheated:
 		_try_start_melee_attack()
 		return
 
 	_melee_state = MeleeState.READY
 	_queued_melee_attack = false
-	if _melee_combo_step > 2:
+	if _melee_combo_step >= _get_melee_combo_count():
 		_melee_combo_step = 0
 		_melee_combo_reset_remaining = 0.0
 
@@ -497,13 +568,15 @@ func _apply_melee_damage() -> void:
 
 
 func _get_melee_damage() -> int:
-	match _current_melee_step:
-		0:
-			return 34
-		1:
-			return 48
-		_:
-			return 68
+	if _melee_combo_damages.is_empty():
+		return 0
+
+	var index: int = clampi(_current_melee_step, 0, _melee_combo_damages.size() - 1)
+	return _melee_combo_damages[index]
+
+
+func _get_melee_combo_count() -> int:
+	return maxi(_melee_combo_damages.size(), 1)
 
 
 func _consume_stamina(amount: float) -> void:
