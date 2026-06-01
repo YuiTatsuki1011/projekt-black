@@ -13,6 +13,13 @@ const SLOT_COLOR := Color(0.12, 0.13, 0.15, 1.0)
 const SLOT_BORDER_COLOR := Color(0.42, 0.44, 0.48, 1.0)
 const SLOT_PLACEABLE_COLOR := Color(0.18, 0.82, 0.35, 0.32)
 const SLOT_BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.34)
+const DETAIL_PANEL_SIZE := Vector2(306, 318)
+const DETAIL_PANEL_COLOR := Color(0.09, 0.095, 0.108, 0.98)
+const DETAIL_PANEL_BORDER_COLOR := Color(0.42, 0.44, 0.48, 1.0)
+const DETAIL_TEXT_COLOR := Color(0.9, 0.92, 0.9, 1.0)
+const DETAIL_MUTED_COLOR := Color(0.62, 0.65, 0.68, 1.0)
+const DETAIL_BETTER_COLOR := Color(0.34, 0.92, 0.48, 1.0)
+const DETAIL_WORSE_COLOR := Color(0.95, 0.32, 0.28, 1.0)
 const DRAG_SOURCE_NONE := &""
 const DRAG_SOURCE_INVENTORY := &"inventory"
 const DRAG_SOURCE_EQUIPMENT := &"equipment"
@@ -44,6 +51,10 @@ var _equipment_drag_node: Control
 var _placement_markers: Array[ColorRect] = []
 var _slot_preview: ColorRect
 var _warning_tween: Tween
+var _detail_panel: Panel
+var _detail_rows: VBoxContainer
+var _hover_entry_id: int = -1
+var _hover_equipment_slot: StringName = &""
 
 
 func _ready() -> void:
@@ -95,6 +106,7 @@ func set_inventory_open(is_open: bool) -> void:
 		_refresh()
 	else:
 		_cancel_drag()
+		_hide_detail_panel()
 
 
 func _build_grid_cells() -> void:
@@ -150,6 +162,9 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	item_panel.position = _grid_to_local(position)
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
+	if not is_dragged:
+		item_panel.mouse_entered.connect(_show_entry_details.bind(entry_id))
+		item_panel.mouse_exited.connect(_hide_detail_panel)
 
 	items_root.add_child(item_panel)
 	_item_nodes[entry_id] = item_panel
@@ -199,6 +214,7 @@ func _begin_drag(entry_id: int) -> void:
 	if _inventory == null or not _item_nodes.has(entry_id):
 		return
 
+	_hide_detail_panel()
 	_drag_source = DRAG_SOURCE_INVENTORY
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
@@ -534,8 +550,11 @@ func _add_equipment_slot(slot: StringName, slot_name: String) -> void:
 	slot_panel.custom_minimum_size = Vector2(243, 62)
 	slot_panel.add_theme_stylebox_override("panel", _make_flat_style(SLOT_COLOR, SLOT_BORDER_COLOR, 1))
 	slot_panel.gui_input.connect(_on_equipment_slot_gui_input.bind(slot))
+	slot_panel.mouse_entered.connect(_show_equipment_slot_details.bind(slot))
+	slot_panel.mouse_exited.connect(_hide_detail_panel)
 
 	var margin := MarginContainer.new()
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	margin.add_theme_constant_override("margin_left", 10)
 	margin.add_theme_constant_override("margin_top", 7)
@@ -544,16 +563,19 @@ func _add_equipment_slot(slot: StringName, slot_name: String) -> void:
 	slot_panel.add_child(margin)
 
 	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	rows.add_theme_constant_override("separation", 4)
 	margin.add_child(rows)
 
 	var title := Label.new()
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title.text = slot_name
 	title.add_theme_font_size_override("font_size", 9)
 	title.modulate = Color(0.68, 0.70, 0.74, 1.0)
 	rows.add_child(title)
 
 	var value := Label.new()
+	value.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	value.text = _get_equipped_weapon_name(slot)
 	value.add_theme_font_size_override("font_size", 13)
 	value.clip_text = true
@@ -588,6 +610,7 @@ func _begin_equipment_drag(slot: StringName) -> void:
 	if _inventory == null or _equipment == null:
 		return
 
+	_hide_detail_panel()
 	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
 	if item_id == &"":
 		return
@@ -732,6 +755,391 @@ func _clear_warning() -> void:
 
 	warning_label.text = ""
 	warning_label.modulate.a = 1.0
+
+
+func _show_entry_details(entry_id: int) -> void:
+	if _is_dragging() or _inventory == null:
+		return
+
+	var entry: Dictionary = _inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return
+
+	_hover_entry_id = entry_id
+	_hover_equipment_slot = &""
+	_show_item_details(entry.get("item_id", &""), int(entry.get("quantity", 1)), true)
+
+
+func _show_equipment_slot_details(slot: StringName) -> void:
+	if _is_dragging() or _equipment == null:
+		return
+
+	_hover_entry_id = -1
+	_hover_equipment_slot = slot
+	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
+	if item_id == &"":
+		_show_empty_slot_details(slot)
+		return
+
+	_show_item_details(item_id, 1, false)
+
+
+func _show_item_details(item_id: StringName, quantity: int, compare_to_equipped: bool) -> void:
+	if item_id == &"" or _inventory == null:
+		_hide_detail_panel()
+		return
+
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var item_type: StringName = _get_item_type(item_id)
+	var weapon: Resource = _load_weapon_resource_for_item(item_id)
+	var compare_weapon: Resource = null
+	if compare_to_equipped:
+		var compare_slot: StringName = _slot_for_item_type(item_type)
+		if compare_slot != &"":
+			compare_weapon = _get_equipped_weapon_for_slot(compare_slot)
+
+	_ensure_detail_panel()
+	_clear_children(_detail_rows)
+
+	_add_detail_title(_get_detail_display_name(definition, weapon))
+	_add_detail_note(_get_detail_type_line(definition, item_type))
+	if compare_weapon != null:
+		_add_detail_note("VS " + str(compare_weapon.get("display_name")))
+	_add_detail_separator()
+
+	if quantity > 1:
+		_add_detail_stat_row("Quantity", str(quantity))
+
+	if weapon != null and item_type == &"ranged_weapon":
+		_populate_ranged_weapon_details(weapon, compare_weapon)
+	elif weapon != null and item_type == &"melee_weapon":
+		_populate_melee_weapon_details(weapon, compare_weapon)
+	else:
+		_populate_generic_item_details(definition, quantity)
+
+	_detail_panel.visible = true
+	_position_detail_panel()
+
+
+func _show_empty_slot_details(slot: StringName) -> void:
+	_ensure_detail_panel()
+	_clear_children(_detail_rows)
+
+	_add_detail_title("Empty " + _get_slot_display_name(slot))
+	_add_detail_note("Equipment Slot")
+	_add_detail_separator()
+	_add_detail_stat_row("Slot", _get_slot_display_name(slot))
+
+	_detail_panel.visible = true
+	_position_detail_panel()
+
+
+func _hide_detail_panel() -> void:
+	_hover_entry_id = -1
+	_hover_equipment_slot = &""
+	if is_instance_valid(_detail_panel):
+		_detail_panel.visible = false
+
+
+func _ensure_detail_panel() -> void:
+	if is_instance_valid(_detail_panel):
+		return
+
+	_detail_panel = Panel.new()
+	_detail_panel.name = "ItemDetailPanel"
+	_detail_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_detail_panel.size = DETAIL_PANEL_SIZE
+	_detail_panel.custom_minimum_size = DETAIL_PANEL_SIZE
+	_detail_panel.z_index = 45
+	_detail_panel.visible = false
+	_detail_panel.add_theme_stylebox_override("panel", _make_flat_style(
+		DETAIL_PANEL_COLOR,
+		DETAIL_PANEL_BORDER_COLOR,
+		2
+	))
+	root.add_child(_detail_panel)
+
+	var margin := MarginContainer.new()
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 14)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_right", 14)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	_detail_panel.add_child(margin)
+
+	_detail_rows = VBoxContainer.new()
+	_detail_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_detail_rows.add_theme_constant_override("separation", 6)
+	margin.add_child(_detail_rows)
+
+
+func _position_detail_panel() -> void:
+	if not is_instance_valid(_detail_panel):
+		return
+
+	var margin := 16.0
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var target_x: float = panel.global_position.x + panel.size.x + margin
+	if target_x + DETAIL_PANEL_SIZE.x > viewport_size.x - margin:
+		target_x = panel.global_position.x - DETAIL_PANEL_SIZE.x - margin
+
+	var target_y: float = panel.global_position.y
+	_detail_panel.global_position = Vector2(
+		clampf(target_x, margin, viewport_size.x - DETAIL_PANEL_SIZE.x - margin),
+		clampf(target_y, margin, viewport_size.y - DETAIL_PANEL_SIZE.y - margin)
+	)
+
+
+func _populate_ranged_weapon_details(weapon: Resource, compare_weapon: Resource) -> void:
+	_add_detail_stat_row(
+		"Damage",
+		str(_get_resource_int(weapon, &"damage")),
+		_get_resource_int(weapon, &"damage"),
+		_get_compare_int(compare_weapon, &"damage"),
+		true
+	)
+	_add_detail_stat_row(
+		"Magazine",
+		str(_get_resource_int(weapon, &"magazine_size")),
+		_get_resource_int(weapon, &"magazine_size"),
+		_get_compare_int(compare_weapon, &"magazine_size"),
+		true
+	)
+	_add_detail_stat_row(
+		"Fire Interval",
+		_format_seconds(_get_resource_float(weapon, &"fire_cooldown")),
+		_get_resource_float(weapon, &"fire_cooldown"),
+		_get_compare_float(compare_weapon, &"fire_cooldown"),
+		false
+	)
+	_add_detail_stat_row(
+		"Reload",
+		_format_seconds(_get_resource_float(weapon, &"reload_time")),
+		_get_resource_float(weapon, &"reload_time"),
+		_get_compare_float(compare_weapon, &"reload_time"),
+		false
+	)
+	_add_detail_stat_row(
+		"Recoil",
+		"%.2f" % _get_resource_float(weapon, &"recoil_amount"),
+		_get_resource_float(weapon, &"recoil_amount"),
+		_get_compare_float(compare_weapon, &"recoil_amount"),
+		false
+	)
+
+	var ammo_id := StringName(weapon.get("ammo_item_id"))
+	var ammo_definition: Dictionary = _inventory.get_item_definition(ammo_id)
+	_add_detail_stat_row("Ammo", str(ammo_definition.get("name", ammo_id)))
+
+
+func _populate_melee_weapon_details(weapon: Resource, compare_weapon: Resource) -> void:
+	var combo_damages: Variant = weapon.get("combo_damages")
+	var compare_combo_damages: Variant = null if compare_weapon == null else compare_weapon.get("combo_damages")
+	_add_detail_stat_row(
+		"Combo Damage",
+		_format_combo_damages(combo_damages),
+		_sum_combo_damages(combo_damages),
+		_sum_combo_damages(compare_combo_damages),
+		true
+	)
+	_add_detail_stat_row(
+		"Stamina Cost",
+		str(_get_resource_int(weapon, &"stamina_cost")),
+		_get_resource_float(weapon, &"stamina_cost"),
+		_get_compare_float(compare_weapon, &"stamina_cost"),
+		false
+	)
+	_add_detail_stat_row(
+		"Min Stamina",
+		str(_get_resource_int(weapon, &"min_stamina_to_use")),
+		_get_resource_float(weapon, &"min_stamina_to_use"),
+		_get_compare_float(compare_weapon, &"min_stamina_to_use"),
+		false
+	)
+	_add_detail_stat_row(
+		"Lunge Speed",
+		str(_get_resource_int(weapon, &"lunge_speed")),
+		_get_resource_float(weapon, &"lunge_speed"),
+		_get_compare_float(compare_weapon, &"lunge_speed"),
+		true
+	)
+	_add_detail_stat_row(
+		"Recovery",
+		_format_seconds(_get_resource_float(weapon, &"recovery_time")),
+		_get_resource_float(weapon, &"recovery_time"),
+		_get_compare_float(compare_weapon, &"recovery_time"),
+		false
+	)
+
+
+func _populate_generic_item_details(definition: Dictionary, quantity: int) -> void:
+	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	_add_detail_stat_row("Grid Size", "%dx%d" % [item_size.x, item_size.y])
+	_add_detail_stat_row("Stackable", "Yes" if bool(definition.get("stackable", false)) else "No")
+	if bool(definition.get("stackable", false)):
+		_add_detail_stat_row("Max Stack", str(int(definition.get("max_stack", quantity))))
+
+
+func _add_detail_title(text: String) -> void:
+	var label := Label.new()
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.text = text
+	label.modulate = DETAIL_TEXT_COLOR
+	label.add_theme_font_size_override("font_size", 17)
+	label.clip_text = true
+	_detail_rows.add_child(label)
+
+
+func _add_detail_note(text: String) -> void:
+	var label := Label.new()
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.text = text
+	label.modulate = DETAIL_MUTED_COLOR
+	label.add_theme_font_size_override("font_size", 11)
+	label.clip_text = true
+	_detail_rows.add_child(label)
+
+
+func _add_detail_separator() -> void:
+	var separator := HSeparator.new()
+	separator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_detail_rows.add_child(separator)
+
+
+func _add_detail_stat_row(
+	stat_name: String,
+	stat_value: String,
+	value: Variant = null,
+	compare_value: Variant = null,
+	higher_is_better: bool = true
+) -> void:
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.custom_minimum_size = Vector2(0, 20)
+	row.add_theme_constant_override("separation", 8)
+	_detail_rows.add_child(row)
+
+	var name_label := Label.new()
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_label.text = stat_name
+	name_label.modulate = DETAIL_MUTED_COLOR
+	name_label.add_theme_font_size_override("font_size", 12)
+	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_label.clip_text = true
+	row.add_child(name_label)
+
+	var value_label := Label.new()
+	value_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	value_label.text = stat_value
+	value_label.modulate = _get_comparison_color(value, compare_value, higher_is_better)
+	value_label.add_theme_font_size_override("font_size", 12)
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.custom_minimum_size = Vector2(128, 0)
+	value_label.clip_text = true
+	row.add_child(value_label)
+
+
+func _get_comparison_color(value: Variant, compare_value: Variant, higher_is_better: bool) -> Color:
+	if value == null or compare_value == null:
+		return DETAIL_TEXT_COLOR
+	if not _is_numeric(value) or not _is_numeric(compare_value):
+		return DETAIL_TEXT_COLOR
+
+	var delta := float(value) - float(compare_value)
+	if absf(delta) <= 0.001:
+		return DETAIL_TEXT_COLOR
+
+	var is_better := delta > 0.0 if higher_is_better else delta < 0.0
+	return DETAIL_BETTER_COLOR if is_better else DETAIL_WORSE_COLOR
+
+
+func _is_numeric(value: Variant) -> bool:
+	return value is int or value is float
+
+
+func _get_detail_display_name(definition: Dictionary, weapon: Resource) -> String:
+	if weapon != null:
+		return str(weapon.get("display_name"))
+
+	return str(definition.get("name", "Item"))
+
+
+func _get_detail_type_line(definition: Dictionary, item_type: StringName) -> String:
+	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	var type_name := "Item"
+	if item_type == &"ranged_weapon":
+		type_name = "Sidearm"
+	elif item_type == &"melee_weapon":
+		type_name = "Melee"
+	elif bool(definition.get("stackable", false)):
+		type_name = "Stack"
+
+	return "%s  |  %dx%d" % [type_name, item_size.x, item_size.y]
+
+
+func _get_slot_display_name(slot: StringName) -> String:
+	if slot == &"ranged":
+		return "Sidearm"
+	if slot == &"melee":
+		return "Melee"
+
+	return "Slot"
+
+
+func _get_resource_int(resource: Resource, property_name: StringName) -> int:
+	return int(_get_resource_float(resource, property_name))
+
+
+func _get_resource_float(resource: Resource, property_name: StringName) -> float:
+	if resource == null:
+		return 0.0
+
+	var value: Variant = resource.get(property_name)
+	if value == null:
+		return 0.0
+
+	return float(value)
+
+
+func _get_compare_int(resource: Resource, property_name: StringName) -> Variant:
+	if resource == null:
+		return null
+
+	return _get_resource_int(resource, property_name)
+
+
+func _get_compare_float(resource: Resource, property_name: StringName) -> Variant:
+	if resource == null:
+		return null
+
+	return _get_resource_float(resource, property_name)
+
+
+func _format_seconds(value: float) -> String:
+	return "%.2fs" % value
+
+
+func _format_combo_damages(value: Variant) -> String:
+	if value == null:
+		return "-"
+
+	var parts: Array[String] = []
+	for damage in value:
+		parts.append(str(int(damage)))
+
+	return " / ".join(parts)
+
+
+func _sum_combo_damages(value: Variant) -> Variant:
+	if value == null:
+		return null
+
+	var total := 0
+	for damage in value:
+		total += int(damage)
+
+	return total
 
 
 func _entry_pixel_size(entry_size: Vector2i) -> Vector2:
