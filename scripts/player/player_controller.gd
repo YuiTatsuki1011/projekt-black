@@ -21,6 +21,9 @@ const ENEMY_COLLISION_MASK: int = 8
 @export var recoil_recovery_speed: float = 8.0
 @export var aim_flip_dead_zone: float = 12.0
 @export var damage_flash_time: float = 0.12
+@export var damage_knockback_strength: float = 130.0
+@export var damage_knockback_lift: float = -55.0
+@export var damage_knockback_recovery: float = 520.0
 @export var projectile_scene: PackedScene
 
 @onready var body_root: Node2D = $VisualRoot/BodyRoot
@@ -47,6 +50,7 @@ var _facing: int = 1
 var _recoil: float = 0.0
 var _nearby_interactables: Array[Node2D] = []
 var _damage_flash_tween: Tween
+var _damage_knockback_velocity: Vector2 = Vector2.ZERO
 
 
 func _ready() -> void:
@@ -95,7 +99,7 @@ func _handle_movement(delta: float) -> void:
 	if _is_crouching:
 		active_speed *= crouch_speed_multiplier
 
-	velocity.x = input_axis * active_speed
+	velocity.x = input_axis * active_speed + _damage_knockback_velocity.x
 
 	if not is_on_floor():
 		velocity.y += _gravity * delta
@@ -104,6 +108,8 @@ func _handle_movement(delta: float) -> void:
 
 	if Input.is_action_just_pressed("jump") and is_on_floor() and not _is_crouching:
 		velocity.y = jump_velocity
+
+	_damage_knockback_velocity = _damage_knockback_velocity.move_toward(Vector2.ZERO, damage_knockback_recovery * delta)
 
 
 func _handle_actions() -> void:
@@ -303,6 +309,16 @@ func _on_died() -> void:
 	body_root.modulate = Color(0.35, 0.35, 0.35, 1.0)
 	arm_rig.visible = false
 	died.emit()
+
+
+func apply_damage_reaction(direction: Vector2, _damage: int, _source_position: Vector2) -> void:
+	var knockback_direction := direction.normalized()
+	if knockback_direction == Vector2.ZERO:
+		knockback_direction = Vector2.RIGHT
+
+	_damage_knockback_velocity.x = knockback_direction.x * damage_knockback_strength
+	if is_on_floor():
+		velocity.y = damage_knockback_lift
 
 
 func _on_damaged(_amount: int, _current_health: int, _max_health: int) -> void:
