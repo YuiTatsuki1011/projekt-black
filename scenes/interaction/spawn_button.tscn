@@ -36,7 +36,7 @@ offset_top = 18.0
 offset_right = 34.0
 offset_bottom = 34.0
 theme_override_font_sizes/font_size = 9
-text = "W"
+text = "F"
 horizontal_alignment = 1
 
 [node name="SpawnMarker" type="Marker2D" parent="."]

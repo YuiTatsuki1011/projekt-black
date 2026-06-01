@@ -7,27 +7,34 @@ const CELL_PITCH: int = CELL_SIZE + CELL_GAP
 const CELL_COLOR := Color(0.16, 0.17, 0.19, 1.0)
 const CELL_BORDER_COLOR := Color(0.36, 0.38, 0.42, 1.0)
 const ITEM_BORDER_COLOR := Color(0.9, 0.92, 0.84, 1.0)
+const PLACEABLE_COLOR := Color(0.18, 0.82, 0.35, 0.42)
+const BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.5)
 
 @export var player_path: NodePath = NodePath("../Player")
+@export var dropped_item_scene: PackedScene
 
+@onready var panel: Control = $Root/Panel
 @onready var grid_root: Control = $Root/Panel/Margin/Rows/GridRoot
 @onready var cells_root: Control = $Root/Panel/Margin/Rows/GridRoot/CellsRoot
 @onready var items_root: Control = $Root/Panel/Margin/Rows/GridRoot/ItemsRoot
-@onready var preview: ColorRect = $Root/Panel/Margin/Rows/GridRoot/Preview
+@onready var placement_root: Control = $Root/Panel/Margin/Rows/GridRoot/PlacementRoot
 
+var _player: Node2D
 var _inventory: Node
 var _item_nodes: Dictionary = {}
 var _drag_entry_id: int = -1
 var _drag_cell_offset: Vector2i = Vector2i.ZERO
+var _drag_mouse_offset: Vector2 = Vector2.ZERO
+var _placement_markers: Array[ColorRect] = []
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	visible = false
-	preview.visible = false
 
 	var player := get_node_or_null(player_path)
 	if player != null:
+		_player = player as Node2D
 		_inventory = player.get_node_or_null("Inventory")
 
 	if _inventory != null:
@@ -121,6 +128,7 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	item_panel.size = _entry_pixel_size(size)
 	item_panel.custom_minimum_size = Vector2.ZERO
 	item_panel.clip_contents = true
+	item_panel.modulate.a = 0.62 if is_dragged else 1.0
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
 	item_panel.add_theme_stylebox_override("panel", _make_flat_style(
@@ -163,6 +171,7 @@ func _begin_drag(entry_id: int) -> void:
 	var entry: Dictionary = _inventory.get_entry(entry_id)
 	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
 	var local_mouse_position: Vector2 = item_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
 	_drag_cell_offset = Vector2i(
 		clampi(floori(local_mouse_position.x / CELL_PITCH), 0, entry_size.x - 1),
 		clampi(floori(local_mouse_position.y / CELL_PITCH), 0, entry_size.y - 1)
@@ -179,11 +188,8 @@ func _update_drag_visual() -> void:
 	var entry: Dictionary = _inventory.get_entry(_drag_entry_id)
 	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
 
-	item_node.position = _grid_to_local(target_cell)
-	preview.visible = true
-	preview.position = _grid_to_local(target_cell)
-	preview.size = _entry_pixel_size(entry_size)
-	preview.color = Color(0.28, 0.82, 0.34, 0.34) if _inventory.can_place(_drag_entry_id, target_cell) else Color(0.9, 0.12, 0.1, 0.42)
+	item_node.global_position = get_viewport().get_mouse_position() - _drag_mouse_offset
+	_update_placement_markers(target_cell, entry_size)
 
 
 func _finish_drag() -> void:
@@ -195,7 +201,10 @@ func _finish_drag() -> void:
 	if _item_nodes.has(_drag_entry_id):
 		target_cell = _get_drag_target_cell()
 
-	_inventory.move_entry(_drag_entry_id, target_cell)
+	if _is_mouse_inside_grid():
+		_inventory.move_entry(_drag_entry_id, target_cell)
+	elif not _is_mouse_inside_inventory_frame():
+		_drop_dragged_entry_to_world()
 	_cancel_drag()
 	_refresh()
 
@@ -203,7 +212,8 @@ func _finish_drag() -> void:
 func _cancel_drag() -> void:
 	_drag_entry_id = -1
 	_drag_cell_offset = Vector2i.ZERO
-	preview.visible = false
+	_drag_mouse_offset = Vector2.ZERO
+	_clear_placement_markers()
 
 
 func _grid_to_local(grid_position: Vector2i) -> Vector2:
@@ -217,6 +227,66 @@ func _global_to_grid(global_position: Vector2) -> Vector2i:
 
 func _get_drag_target_cell() -> Vector2i:
 	return _global_to_grid(get_viewport().get_mouse_position()) - _drag_cell_offset
+
+
+func _is_mouse_inside_grid() -> bool:
+	var local_position: Vector2 = grid_root.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+	var grid_size: Vector2 = grid_root.custom_minimum_size
+	return Rect2(Vector2.ZERO, grid_size).has_point(local_position)
+
+
+func _is_mouse_inside_inventory_frame() -> bool:
+	var local_position: Vector2 = panel.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+	return Rect2(Vector2.ZERO, panel.size).has_point(local_position)
+
+
+func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> void:
+	_clear_placement_markers()
+
+	if not _is_mouse_inside_grid():
+		return
+
+	for y in entry_size.y:
+		for x in entry_size.x:
+			var cell := target_cell + Vector2i(x, y)
+			var marker := ColorRect.new()
+			marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			marker.position = _grid_to_local(cell)
+			marker.size = Vector2(CELL_SIZE, CELL_SIZE)
+			marker.color = PLACEABLE_COLOR if _inventory.is_cell_free(cell, _drag_entry_id) else BLOCKED_COLOR
+			placement_root.add_child(marker)
+			_placement_markers.append(marker)
+
+
+func _clear_placement_markers() -> void:
+	for marker in _placement_markers:
+		if is_instance_valid(marker):
+			if marker.get_parent() != null:
+				marker.get_parent().remove_child(marker)
+			marker.queue_free()
+	_placement_markers.clear()
+
+
+func _drop_dragged_entry_to_world() -> void:
+	if dropped_item_scene == null or _player == null:
+		return
+
+	var dropped_entry: Dictionary = _inventory.remove_entry(_drag_entry_id)
+	if dropped_entry.is_empty():
+		return
+
+	var dropped_item := dropped_item_scene.instantiate()
+	dropped_item.set("item_id", dropped_entry.get("item_id", &""))
+	dropped_item.set("quantity", int(dropped_entry.get("quantity", 1)))
+
+	var drop_parent: Node = get_tree().current_scene
+	if drop_parent == null:
+		drop_parent = _player.get_parent()
+	drop_parent.add_child(dropped_item)
+
+	if dropped_item is Node2D:
+		var dropped_item_2d := dropped_item as Node2D
+		dropped_item_2d.global_position = _player.global_position + Vector2(28, -10)
 
 
 func _entry_pixel_size(entry_size: Vector2i) -> Vector2:

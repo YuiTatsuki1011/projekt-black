@@ -119,6 +119,22 @@ func remove_item(item_id: StringName, quantity: int) -> int:
 	return removed_quantity
 
 
+func remove_entry(entry_id: int) -> Dictionary:
+	if not _entries.has(entry_id):
+		return {}
+
+	var entry: Dictionary = _entries[entry_id].duplicate(true)
+	_entries.erase(entry_id)
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var quantity: int = int(entry.get("quantity", 0))
+	_set_total_quantity(item_id, get_quantity(item_id) - quantity)
+	grid_changed.emit()
+
+	entry["entry_id"] = entry_id
+	return entry
+
+
 func has_item(item_id: StringName, quantity: int = 1) -> bool:
 	return get_quantity(item_id) >= quantity
 
@@ -162,6 +178,23 @@ func can_place(entry_id: int, position: Vector2i) -> bool:
 
 	var entry: Dictionary = _entries[entry_id]
 	return _is_area_free(position, entry.get("size", Vector2i.ONE), entry_id)
+
+
+func is_cell_free(cell: Vector2i, ignored_entry_id: int = -1) -> bool:
+	if cell.x < 0 or cell.y < 0 or cell.x >= grid_width or cell.y >= grid_height:
+		return false
+
+	var checked_rect := Rect2i(cell, Vector2i.ONE)
+	for entry_id in _entries:
+		if int(entry_id) == ignored_entry_id:
+			continue
+
+		var entry: Dictionary = _entries[entry_id]
+		var entry_rect := Rect2i(entry.get("position", Vector2i.ZERO), entry.get("size", Vector2i.ONE))
+		if checked_rect.intersects(entry_rect):
+			return false
+
+	return true
 
 
 func move_entry(entry_id: int, position: Vector2i) -> bool:

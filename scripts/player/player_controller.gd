@@ -630,6 +630,8 @@ func _try_apply_close_barrel_hit() -> bool:
 
 
 func _interact_with_nearest() -> void:
+	_refresh_nearby_interactables()
+
 	var nearest: Node2D = null
 	var nearest_distance_squared: float = INF
 
@@ -644,6 +646,12 @@ func _interact_with_nearest() -> void:
 
 	if nearest != null and nearest.has_method("interact"):
 		nearest.call("interact", self)
+
+
+func _refresh_nearby_interactables() -> void:
+	for area in interaction_area.get_overlapping_areas():
+		if area.has_method("interact") and area not in _nearby_interactables:
+			_nearby_interactables.append(area)
 
 
 func _on_interaction_area_entered(area: Area2D) -> void:

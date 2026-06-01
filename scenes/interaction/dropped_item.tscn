@@ -1,0 +1,36 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/interaction/dropped_item.gd" id="1_dropped_item"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_dropped_item"]
+size = Vector2(36, 18)
+
+[node name="DroppedItem" type="Area2D"]
+collision_layer = 16
+collision_mask = 0
+script = ExtResource("1_dropped_item")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_dropped_item")
+
+[node name="Body" type="Polygon2D" parent="."]
+color = Color(0.28, 0.56, 0.76, 1)
+polygon = PackedVector2Array(-18, -9, 18, -9, 18, 9, -18, 9)
+
+[node name="Label" type="Label" parent="."]
+offset_left = -46.0
+offset_top = -36.0
+offset_right = 46.0
+offset_bottom = -16.0
+theme_override_font_sizes/font_size = 10
+text = "Ammo x1"
+horizontal_alignment = 1
+
+[node name="Prompt" type="Label" parent="."]
+offset_left = -18.0
+offset_top = 12.0
+offset_right = 18.0
+offset_bottom = 28.0
+theme_override_font_sizes/font_size = 9
+text = "F"
+horizontal_alignment = 1
