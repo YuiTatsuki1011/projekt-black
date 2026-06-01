@@ -112,6 +112,59 @@ func add_item(item_id: StringName, quantity: int) -> int:
 	return added_quantity
 
 
+func add_item_at(item_id: StringName, quantity: int, position: Vector2i) -> int:
+	if quantity <= 0:
+		return 0
+
+	var definition: Dictionary = get_item_definition(item_id)
+	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	var is_stackable: bool = bool(definition.get("stackable", false))
+	var max_stack: int = int(definition.get("max_stack", 1))
+	var stack_quantity: int = mini(max_stack, quantity) if is_stackable else 1
+
+	if not _is_area_free(position, item_size):
+		return 0
+
+	_create_entry(item_id, position, item_size, stack_quantity)
+	_set_total_quantity(item_id, get_quantity(item_id) + stack_quantity)
+	grid_changed.emit()
+	return stack_quantity
+
+
+func can_add_item(item_id: StringName, quantity: int = 1) -> bool:
+	if quantity <= 0:
+		return true
+
+	var remaining_quantity: int = quantity
+	var definition: Dictionary = get_item_definition(item_id)
+	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	var is_stackable: bool = bool(definition.get("stackable", false))
+	var max_stack: int = int(definition.get("max_stack", 1))
+	var occupied_rects: Array[Rect2i] = []
+
+	for entry_id in _entries:
+		var entry: Dictionary = _entries[entry_id]
+		occupied_rects.append(Rect2i(entry.get("position", Vector2i.ZERO), entry.get("size", Vector2i.ONE)))
+
+		if not is_stackable or entry.get("item_id") != item_id:
+			continue
+
+		var entry_quantity: int = int(entry.get("quantity", 0))
+		remaining_quantity -= maxi(max_stack - entry_quantity, 0)
+		if remaining_quantity <= 0:
+			return true
+
+	while remaining_quantity > 0:
+		var position: Vector2i = _find_first_free_position_with_rects(item_size, occupied_rects)
+		if position.x < 0:
+			return false
+
+		occupied_rects.append(Rect2i(position, item_size))
+		remaining_quantity -= mini(max_stack, remaining_quantity) if is_stackable else 1
+
+	return true
+
+
 func remove_item(item_id: StringName, quantity: int) -> int:
 	if quantity <= 0:
 		return 0
@@ -268,6 +321,16 @@ func _find_first_free_position(size: Vector2i) -> Vector2i:
 	return Vector2i(-1, -1)
 
 
+func _find_first_free_position_with_rects(size: Vector2i, occupied_rects: Array[Rect2i]) -> Vector2i:
+	for y in grid_height:
+		for x in grid_width:
+			var position := Vector2i(x, y)
+			if _is_area_free_in_rects(position, size, occupied_rects):
+				return position
+
+	return Vector2i(-1, -1)
+
+
 func _is_area_free(position: Vector2i, size: Vector2i, ignored_entry_id: int = -1) -> bool:
 	if position.x < 0 or position.y < 0:
 		return false
@@ -282,6 +345,20 @@ func _is_area_free(position: Vector2i, size: Vector2i, ignored_entry_id: int = -
 		var entry: Dictionary = _entries[entry_id]
 		var entry_rect := Rect2i(entry.get("position", Vector2i.ZERO), entry.get("size", Vector2i.ONE))
 		if checked_rect.intersects(entry_rect):
+			return false
+
+	return true
+
+
+func _is_area_free_in_rects(position: Vector2i, size: Vector2i, occupied_rects: Array[Rect2i]) -> bool:
+	if position.x < 0 or position.y < 0:
+		return false
+	if position.x + size.x > grid_width or position.y + size.y > grid_height:
+		return false
+
+	var checked_rect := Rect2i(position, size)
+	for occupied_rect in occupied_rects:
+		if checked_rect.intersects(occupied_rect):
 			return false
 
 	return true

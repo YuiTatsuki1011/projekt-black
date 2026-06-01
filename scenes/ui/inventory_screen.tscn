@@ -38,9 +38,9 @@ mouse_filter = 2
 [node name="Panel" type="PanelContainer" parent="Root"]
 layout_mode = 0
 offset_left = 680.0
-offset_top = 188.0
+offset_top = 176.0
 offset_right = 1240.0
-offset_bottom = 668.0
+offset_bottom = 696.0
 mouse_filter = 0
 theme_override_styles/panel = SubResource("StyleBoxFlat_inventory_panel")
 
@@ -89,3 +89,10 @@ layout_mode = 0
 offset_right = 498.0
 offset_bottom = 298.0
 mouse_filter = 2
+
+[node name="WarningLabel" type="Label" parent="Root/Panel/Margin/Rows"]
+custom_minimum_size = Vector2(498, 18)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = ""
+horizontal_alignment = 1

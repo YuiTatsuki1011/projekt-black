@@ -60,6 +60,7 @@ enum MeleeState {
 @onready var upper_arm_bone: Bone2D = $ArmRig/Skeleton2D/UpperArmBone
 @onready var forearm_bone: Bone2D = $ArmRig/Skeleton2D/UpperArmBone/ForearmBone
 @onready var hand_bone: Bone2D = $ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone
+@onready var gun_root: Node2D = $ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone/GunRoot
 @onready var muzzle: Marker2D = $ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone/GunRoot/Muzzle
 @onready var standing_collision: CollisionShape2D = $StandingCollision
 @onready var crouching_collision: CollisionShape2D = $CrouchingCollision
@@ -102,6 +103,8 @@ var _dodge_cooldown_remaining: float = 0.0
 var _dodge_direction: int = 1
 var _afterimage_timer: float = 0.0
 var _suppress_inventory_ammo_signal: bool = false
+var _has_ranged_weapon: bool = true
+var _has_melee_weapon: bool = true
 var _melee_combo_damages: PackedInt32Array = PackedInt32Array([34, 48, 68])
 
 
@@ -109,7 +112,7 @@ func _ready() -> void:
 	if ProjectSettings.has_setting("physics/2d/default_gravity"):
 		_gravity = float(ProjectSettings.get_setting("physics/2d/default_gravity"))
 	_apply_equipment_stats()
-	current_ammo = magazine_size
+	current_ammo = magazine_size if _has_ranged_weapon else 0
 	if equipment != null and equipment.has_signal("equipment_changed"):
 		equipment.connect("equipment_changed", Callable(self, "_on_equipment_changed"))
 	inventory.item_quantity_changed.connect(_on_inventory_item_quantity_changed)
@@ -136,15 +139,22 @@ func _apply_equipment_stats() -> void:
 	if equipment.has_method("get_ranged_weapon"):
 		var ranged_weapon: Resource = equipment.call("get_ranged_weapon") as Resource
 		if ranged_weapon != null:
+			_has_ranged_weapon = true
 			_apply_ranged_weapon_stats(ranged_weapon)
+		else:
+			_clear_ranged_weapon_stats()
 
 	if equipment.has_method("get_melee_weapon"):
 		var melee_weapon: Resource = equipment.call("get_melee_weapon") as Resource
 		if melee_weapon != null:
+			_has_melee_weapon = true
 			_apply_melee_weapon_stats(melee_weapon)
+		else:
+			_clear_melee_weapon_stats()
 
 
 func _apply_ranged_weapon_stats(ranged_weapon: Resource) -> void:
+	_set_ranged_visual(true)
 	bullet_damage = int(_get_resource_value(ranged_weapon, &"damage", bullet_damage))
 	magazine_size = int(_get_resource_value(ranged_weapon, &"magazine_size", magazine_size))
 	starting_reserve_ammo = int(_get_resource_value(ranged_weapon, &"starting_reserve_ammo", starting_reserve_ammo))
@@ -171,6 +181,34 @@ func _apply_melee_weapon_stats(melee_weapon: Resource) -> void:
 	melee_combo_reset_time = float(_get_resource_value(melee_weapon, &"combo_reset_time", melee_combo_reset_time))
 
 
+func _clear_ranged_weapon_stats() -> void:
+	_has_ranged_weapon = false
+	_set_ranged_visual(false)
+	bullet_damage = 0
+	magazine_size = 0
+	starting_reserve_ammo = 0
+	reload_time = 0.0
+	fire_cooldown = 0.0
+	recoil_amount = 0.0
+	_recoil = 0.0
+	forearm_bone.rotation = 0.0
+	projectile_scene = null
+
+
+func _clear_melee_weapon_stats() -> void:
+	_has_melee_weapon = false
+	_melee_combo_damages = PackedInt32Array()
+	melee_stamina_cost = 0.0
+	melee_min_stamina_to_use = INF
+	_melee_state = MeleeState.READY
+	_melee_timer = 0.0
+	_queued_melee_attack = false
+	_melee_combo_step = 0
+	_current_melee_step = 0
+	_melee_hit_bodies.clear()
+	_set_melee_visual(false)
+
+
 func _get_resource_value(resource: Resource, property_name: StringName, fallback: Variant) -> Variant:
 	var value: Variant = resource.get(property_name)
 	if value == null:
@@ -180,10 +218,14 @@ func _get_resource_value(resource: Resource, property_name: StringName, fallback
 
 
 func _on_equipment_changed(slot: StringName) -> void:
+	var had_ranged_weapon := _has_ranged_weapon
 	_apply_equipment_stats()
 
 	if slot == &"ranged":
-		current_ammo = mini(current_ammo, magazine_size)
+		if _has_ranged_weapon:
+			current_ammo = mini(current_ammo, magazine_size) if had_ranged_weapon else magazine_size
+		else:
+			current_ammo = 0
 		_is_reloading = false
 		_reload_remaining = 0.0
 		_sync_reserve_ammo()
@@ -331,6 +373,9 @@ func _update_aim(delta: float) -> void:
 
 
 func _try_fire() -> void:
+	if not _has_ranged_weapon:
+		return
+
 	if _is_reloading or _fire_cooldown_remaining > 0.0:
 		return
 
@@ -367,6 +412,9 @@ func _try_fire() -> void:
 
 
 func _start_reload() -> void:
+	if not _has_ranged_weapon:
+		return
+
 	if _is_reloading or current_ammo >= magazine_size or reserve_ammo <= 0:
 		return
 
@@ -455,7 +503,7 @@ func _spawn_afterimage() -> void:
 
 
 func _handle_melee_input() -> void:
-	if _is_dodging:
+	if _is_dodging or not _has_melee_weapon:
 		return
 
 	if _melee_state == MeleeState.READY:
@@ -600,7 +648,7 @@ func _emit_stamina_changed() -> void:
 
 
 func _can_use_melee_stamina() -> bool:
-	return not is_stamina_overheated and current_stamina >= melee_min_stamina_to_use
+	return _has_melee_weapon and not is_stamina_overheated and current_stamina >= melee_min_stamina_to_use
 
 
 func _set_melee_visual(visible: bool) -> void:
@@ -608,6 +656,10 @@ func _set_melee_visual(visible: bool) -> void:
 	melee_hit_area.monitoring = visible
 	melee_root.scale.x = float(_melee_direction)
 	melee_slash_visual.visible = visible
+
+
+func _set_ranged_visual(visible: bool) -> void:
+	gun_root.visible = visible
 
 
 func _set_facing(direction: int) -> void:

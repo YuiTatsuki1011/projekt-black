@@ -11,6 +11,11 @@ const PLACEABLE_COLOR := Color(0.18, 0.82, 0.35, 0.42)
 const BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.5)
 const SLOT_COLOR := Color(0.12, 0.13, 0.15, 1.0)
 const SLOT_BORDER_COLOR := Color(0.42, 0.44, 0.48, 1.0)
+const SLOT_PLACEABLE_COLOR := Color(0.18, 0.82, 0.35, 0.32)
+const SLOT_BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.34)
+const DRAG_SOURCE_NONE := &""
+const DRAG_SOURCE_INVENTORY := &"inventory"
+const DRAG_SOURCE_EQUIPMENT := &"equipment"
 
 @export var player_path: NodePath = NodePath("../Player")
 @export var dropped_item_scene: PackedScene
@@ -21,15 +26,23 @@ const SLOT_BORDER_COLOR := Color(0.42, 0.44, 0.48, 1.0)
 @onready var cells_root: Control = $Root/Panel/Margin/Rows/GridRoot/CellsRoot
 @onready var items_root: Control = $Root/Panel/Margin/Rows/GridRoot/ItemsRoot
 @onready var placement_root: Control = $Root/Panel/Margin/Rows/GridRoot/PlacementRoot
+@onready var warning_label: Label = $Root/Panel/Margin/Rows/WarningLabel
 
 var _player: Node2D
 var _inventory: Node
 var _equipment: Node
 var _item_nodes: Dictionary = {}
+var _equipment_slot_nodes: Dictionary = {}
+var _drag_source: StringName = DRAG_SOURCE_NONE
 var _drag_entry_id: int = -1
+var _drag_equipment_slot: StringName = &""
+var _drag_item_id: StringName = &""
 var _drag_cell_offset: Vector2i = Vector2i.ZERO
 var _drag_mouse_offset: Vector2 = Vector2.ZERO
+var _equipment_drag_node: Control
 var _placement_markers: Array[ColorRect] = []
+var _slot_preview: ColorRect
+var _warning_tween: Tween
 
 
 func _ready() -> void:
@@ -62,7 +75,7 @@ func _input(event: InputEvent) -> void:
 	if not visible:
 		return
 
-	if _drag_entry_id >= 0:
+	if _is_dragging():
 		if event is InputEventMouseMotion:
 			_update_drag_visual()
 			get_viewport().set_input_as_handled()
@@ -112,12 +125,12 @@ func _refresh() -> void:
 
 	for entry in _inventory.get_entries():
 		var entry_id: int = int(entry.get("entry_id", -1))
-		if entry_id < 0 or entry_id == _drag_entry_id:
+		if entry_id < 0 or (_drag_source == DRAG_SOURCE_INVENTORY and entry_id == _drag_entry_id):
 			continue
 
 		_add_item_node(entry)
 
-	if _drag_entry_id >= 0:
+	if _drag_source == DRAG_SOURCE_INVENTORY and _drag_entry_id >= 0:
 		var dragged_entry: Dictionary = _inventory.get_entry(_drag_entry_id)
 		if not dragged_entry.is_empty():
 			_add_item_node(dragged_entry, true)
@@ -132,15 +145,22 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	var quantity: int = int(entry.get("quantity", 1))
 	var definition: Dictionary = _inventory.get_item_definition(item_id)
 
+	var item_panel := _create_item_panel(definition, quantity, size, is_dragged)
+	item_panel.position = _grid_to_local(position)
+	item_panel.z_index = 20 if is_dragged else 5
+	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
+
+	items_root.add_child(item_panel)
+	_item_nodes[entry_id] = item_panel
+
+
+func _create_item_panel(definition: Dictionary, quantity: int, size: Vector2i, is_dragged: bool = false) -> Panel:
 	var item_panel := Panel.new()
 	item_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	item_panel.position = _grid_to_local(position)
 	item_panel.size = _entry_pixel_size(size)
 	item_panel.custom_minimum_size = Vector2.ZERO
 	item_panel.clip_contents = true
 	item_panel.modulate.a = 0.62 if is_dragged else 1.0
-	item_panel.z_index = 20 if is_dragged else 5
-	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
 	item_panel.add_theme_stylebox_override("panel", _make_flat_style(
 		definition.get("color", Color(0.44, 0.44, 0.46, 1.0)),
 		ITEM_BORDER_COLOR,
@@ -160,8 +180,7 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	label.add_theme_font_size_override("font_size", 9)
 	item_panel.add_child(label)
 
-	items_root.add_child(item_panel)
-	_item_nodes[entry_id] = item_panel
+	return item_panel
 
 
 func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
@@ -171,7 +190,7 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			_begin_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			_try_equip_entry(entry_id)
+			_try_quick_equip_entry(entry_id)
 			get_viewport().set_input_as_handled()
 
 
@@ -179,10 +198,13 @@ func _begin_drag(entry_id: int) -> void:
 	if _inventory == null or not _item_nodes.has(entry_id):
 		return
 
+	_drag_source = DRAG_SOURCE_INVENTORY
 	_drag_entry_id = entry_id
+	_drag_equipment_slot = &""
 	var item_node := _item_nodes[entry_id] as Control
 	var entry: Dictionary = _inventory.get_entry(entry_id)
 	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
+	_drag_item_id = entry.get("item_id", &"")
 	var local_mouse_position: Vector2 = item_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
 	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
 	_drag_cell_offset = Vector2i(
@@ -193,40 +215,82 @@ func _begin_drag(entry_id: int) -> void:
 
 
 func _update_drag_visual() -> void:
-	if _drag_entry_id < 0 or not _item_nodes.has(_drag_entry_id):
+	if not _is_dragging():
 		return
 
-	var item_node := _item_nodes[_drag_entry_id] as Control
+	var item_node := _get_drag_node()
+	if item_node == null:
+		return
+
 	var target_cell: Vector2i = _get_drag_target_cell()
-	var entry: Dictionary = _inventory.get_entry(_drag_entry_id)
-	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
+	var entry_size: Vector2i = _get_drag_item_size()
 
 	item_node.global_position = get_viewport().get_mouse_position() - _drag_mouse_offset
 	_update_placement_markers(target_cell, entry_size)
+	_update_slot_preview()
 
 
 func _finish_drag() -> void:
-	if _drag_entry_id < 0 or _inventory == null:
+	if not _is_dragging() or _inventory == null:
 		_cancel_drag()
 		return
 
 	var target_cell := Vector2i.ZERO
-	if _item_nodes.has(_drag_entry_id):
-		target_cell = _get_drag_target_cell()
+	target_cell = _get_drag_target_cell()
+	var target_slot: StringName = _get_equipment_slot_under_mouse()
 
-	if _is_mouse_inside_grid():
-		_inventory.move_entry(_drag_entry_id, target_cell)
-	elif not _is_mouse_inside_inventory_frame():
-		_drop_dragged_entry_to_world()
+	if _drag_source == DRAG_SOURCE_INVENTORY:
+		if target_slot != &"":
+			_equip_inventory_entry_to_slot(_drag_entry_id, target_slot)
+		elif _is_mouse_inside_grid():
+			_inventory.move_entry(_drag_entry_id, target_cell)
+		elif not _is_mouse_inside_inventory_frame():
+			_drop_dragged_inventory_entry_to_world()
+	elif _drag_source == DRAG_SOURCE_EQUIPMENT:
+		if _is_mouse_inside_grid():
+			_store_equipped_slot_at(_drag_equipment_slot, target_cell)
+		elif not _is_mouse_inside_inventory_frame():
+			_drop_equipped_slot_to_world(_drag_equipment_slot)
 	_cancel_drag()
 	_refresh()
 
 
 func _cancel_drag() -> void:
+	if is_instance_valid(_equipment_drag_node):
+		_equipment_drag_node.queue_free()
+
+	_drag_source = DRAG_SOURCE_NONE
 	_drag_entry_id = -1
+	_drag_equipment_slot = &""
+	_drag_item_id = &""
 	_drag_cell_offset = Vector2i.ZERO
 	_drag_mouse_offset = Vector2.ZERO
+	_equipment_drag_node = null
 	_clear_placement_markers()
+	_clear_slot_preview()
+	_refresh_equipment()
+
+
+func _is_dragging() -> bool:
+	return _drag_source != DRAG_SOURCE_NONE
+
+
+func _get_drag_node() -> Control:
+	if _drag_source == DRAG_SOURCE_INVENTORY and _item_nodes.has(_drag_entry_id):
+		return _item_nodes[_drag_entry_id] as Control
+	if _drag_source == DRAG_SOURCE_EQUIPMENT and is_instance_valid(_equipment_drag_node):
+		return _equipment_drag_node
+
+	return null
+
+
+func _get_drag_item_size() -> Vector2i:
+	if _drag_source == DRAG_SOURCE_INVENTORY:
+		var entry: Dictionary = _inventory.get_entry(_drag_entry_id)
+		return entry.get("size", Vector2i.ONE)
+
+	var definition: Dictionary = _inventory.get_item_definition(_drag_item_id)
+	return definition.get("size", Vector2i.ONE)
 
 
 func _grid_to_local(grid_position: Vector2i) -> Vector2:
@@ -253,6 +317,20 @@ func _is_mouse_inside_inventory_frame() -> bool:
 	return Rect2(Vector2.ZERO, panel.size).has_point(local_position)
 
 
+func _get_equipment_slot_under_mouse() -> StringName:
+	var mouse_position := get_viewport().get_mouse_position()
+	for slot in _equipment_slot_nodes:
+		var slot_node := _equipment_slot_nodes[slot] as Control
+		if slot_node == null:
+			continue
+
+		var local_position: Vector2 = slot_node.get_global_transform().affine_inverse() * mouse_position
+		if Rect2(Vector2.ZERO, slot_node.size).has_point(local_position):
+			return slot
+
+	return &""
+
+
 func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> void:
 	_clear_placement_markers()
 
@@ -266,7 +344,8 @@ func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> v
 			marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			marker.position = _grid_to_local(cell)
 			marker.size = Vector2(CELL_SIZE, CELL_SIZE)
-			marker.color = PLACEABLE_COLOR if _inventory.is_cell_free(cell, _drag_entry_id) else BLOCKED_COLOR
+			var ignored_entry_id: int = _drag_entry_id if _drag_source == DRAG_SOURCE_INVENTORY else -1
+			marker.color = PLACEABLE_COLOR if _inventory.is_cell_free(cell, ignored_entry_id) else BLOCKED_COLOR
 			placement_root.add_child(marker)
 			_placement_markers.append(marker)
 
@@ -280,17 +359,51 @@ func _clear_placement_markers() -> void:
 	_placement_markers.clear()
 
 
-func _drop_dragged_entry_to_world() -> void:
-	if dropped_item_scene == null or _player == null:
+func _update_slot_preview() -> void:
+	_clear_slot_preview()
+
+	var slot: StringName = _get_equipment_slot_under_mouse()
+	if slot == &"":
 		return
+
+	var slot_node := _equipment_slot_nodes.get(slot) as Control
+	if slot_node == null:
+		return
+
+	var slot_accepts_item := _does_slot_accept_item(slot, _drag_item_id)
+	_slot_preview = ColorRect.new()
+	_slot_preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_slot_preview.color = SLOT_PLACEABLE_COLOR if slot_accepts_item else SLOT_BLOCKED_COLOR
+	_slot_preview.global_position = slot_node.global_position
+	_slot_preview.size = slot_node.size
+	_slot_preview.z_index = 12
+	panel.add_child(_slot_preview)
+
+
+func _clear_slot_preview() -> void:
+	if is_instance_valid(_slot_preview):
+		_slot_preview.queue_free()
+	_slot_preview = null
+
+
+func _drop_dragged_inventory_entry_to_world() -> bool:
+	if dropped_item_scene == null or _player == null:
+		return false
 
 	var dropped_entry: Dictionary = _inventory.remove_entry(_drag_entry_id)
 	if dropped_entry.is_empty():
-		return
+		return false
+
+	return _drop_item_to_world(dropped_entry.get("item_id", &""), int(dropped_entry.get("quantity", 1)))
+
+
+func _drop_item_to_world(item_id: StringName, quantity: int = 1) -> bool:
+	if dropped_item_scene == null or _player == null:
+		return false
 
 	var dropped_item := dropped_item_scene.instantiate()
-	dropped_item.set("item_id", dropped_entry.get("item_id", &""))
-	dropped_item.set("quantity", int(dropped_entry.get("quantity", 1)))
+	dropped_item.set("item_id", item_id)
+	dropped_item.set("quantity", quantity)
 
 	var drop_parent: Node = get_tree().current_scene
 	if drop_parent == null:
@@ -301,8 +414,10 @@ func _drop_dragged_entry_to_world() -> void:
 		var dropped_item_2d := dropped_item as Node2D
 		dropped_item_2d.global_position = _player.global_position + Vector2(28, -10)
 
+	return true
 
-func _try_equip_entry(entry_id: int) -> bool:
+
+func _try_quick_equip_entry(entry_id: int) -> bool:
 	if _inventory == null or _equipment == null:
 		return false
 
@@ -313,15 +428,34 @@ func _try_equip_entry(entry_id: int) -> bool:
 	var item_id: StringName = entry.get("item_id", &"")
 	var definition: Dictionary = _inventory.get_item_definition(item_id)
 	var item_type: StringName = definition.get("type", &"")
-	var resource_path: String = str(definition.get("weapon_resource_path", ""))
-	if resource_path.is_empty():
+	var target_slot: StringName = _slot_for_item_type(item_type)
+	if target_slot == &"":
 		return false
 
-	var next_weapon := load(resource_path) as Resource
+	if _get_equipped_item_id_for_slot(target_slot) != &"":
+		return false
+
+	return _equip_inventory_entry_to_slot(entry_id, target_slot)
+
+
+func _equip_inventory_entry_to_slot(entry_id: int, slot: StringName) -> bool:
+	if _inventory == null or _equipment == null:
+		return false
+
+	var entry: Dictionary = _inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	if not _does_slot_accept_item(slot, item_id):
+		_show_warning("WRONG SLOT")
+		return false
+
+	var next_weapon: Resource = _load_weapon_resource_for_item(item_id)
 	if next_weapon == null:
 		return false
 
-	var previous_item_id: StringName = _get_equipped_item_id(item_type)
+	var previous_item_id: StringName = _get_equipped_item_id_for_slot(slot)
 	if previous_item_id == item_id:
 		return false
 
@@ -329,39 +463,58 @@ func _try_equip_entry(entry_id: int) -> bool:
 	if removed_entry.is_empty():
 		return false
 
-	var equipped := false
-	if item_type == &"ranged_weapon" and _equipment.has_method("equip_ranged_weapon"):
-		_equipment.call("equip_ranged_weapon", next_weapon)
-		equipped = true
-	elif item_type == &"melee_weapon" and _equipment.has_method("equip_melee_weapon"):
-		_equipment.call("equip_melee_weapon", next_weapon)
-		equipped = true
+	if previous_item_id != &"":
+		var added_previous: int = _inventory.add_item(previous_item_id, 1)
+		if added_previous <= 0:
+			_inventory.add_item(item_id, int(removed_entry.get("quantity", 1)))
+			_show_warning("NO SPACE")
+			return false
 
-	if not equipped:
+	if not _equip_weapon_resource(slot, next_weapon):
 		_inventory.add_item(item_id, int(removed_entry.get("quantity", 1)))
 		return false
-
-	if previous_item_id != &"":
-		_inventory.add_item(previous_item_id, 1)
 
 	_refresh()
 	return true
 
 
-func _get_equipped_item_id(item_type: StringName) -> StringName:
+func _get_equipped_item_id_for_slot(slot: StringName) -> StringName:
 	if _equipment == null:
 		return &""
 
-	var equipped_weapon: Resource = null
-	if item_type == &"ranged_weapon" and _equipment.has_method("get_ranged_weapon"):
-		equipped_weapon = _equipment.call("get_ranged_weapon") as Resource
-	elif item_type == &"melee_weapon" and _equipment.has_method("get_melee_weapon"):
-		equipped_weapon = _equipment.call("get_melee_weapon") as Resource
-
+	var equipped_weapon: Resource = _get_equipped_weapon_for_slot(slot)
 	if equipped_weapon == null:
 		return &""
 
 	return StringName(equipped_weapon.get("weapon_id"))
+
+
+func _get_equipped_weapon_for_slot(slot: StringName) -> Resource:
+	if _equipment == null:
+		return null
+	if _equipment.has_method("get_weapon"):
+		return _equipment.call("get_weapon", slot) as Resource
+	if slot == &"ranged" and _equipment.has_method("get_ranged_weapon"):
+		return _equipment.call("get_ranged_weapon") as Resource
+	if slot == &"melee" and _equipment.has_method("get_melee_weapon"):
+		return _equipment.call("get_melee_weapon") as Resource
+
+	return null
+
+
+func _equip_weapon_resource(slot: StringName, weapon: Resource) -> bool:
+	if _equipment == null:
+		return false
+	if _equipment.has_method("equip_weapon"):
+		return bool(_equipment.call("equip_weapon", slot, weapon))
+	if slot == &"ranged" and _equipment.has_method("equip_ranged_weapon"):
+		_equipment.call("equip_ranged_weapon", weapon)
+		return true
+	if slot == &"melee" and _equipment.has_method("equip_melee_weapon"):
+		_equipment.call("equip_melee_weapon", weapon)
+		return true
+
+	return false
 
 
 func _refresh_equipment(_slot: StringName = &"") -> void:
@@ -369,14 +522,17 @@ func _refresh_equipment(_slot: StringName = &"") -> void:
 		return
 
 	_clear_children(equipment_root)
-	_add_equipment_slot("SIDEARM", _get_equipped_weapon_name(&"ranged_weapon"))
-	_add_equipment_slot("MELEE", _get_equipped_weapon_name(&"melee_weapon"))
+	_equipment_slot_nodes.clear()
+	_add_equipment_slot(&"ranged", "SIDEARM")
+	_add_equipment_slot(&"melee", "MELEE")
 
 
-func _add_equipment_slot(slot_name: String, weapon_name: String) -> void:
+func _add_equipment_slot(slot: StringName, slot_name: String) -> void:
 	var slot_panel := Panel.new()
+	slot_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	slot_panel.custom_minimum_size = Vector2(243, 62)
 	slot_panel.add_theme_stylebox_override("panel", _make_flat_style(SLOT_COLOR, SLOT_BORDER_COLOR, 1))
+	slot_panel.gui_input.connect(_on_equipment_slot_gui_input.bind(slot))
 
 	var margin := MarginContainer.new()
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -397,28 +553,184 @@ func _add_equipment_slot(slot_name: String, weapon_name: String) -> void:
 	rows.add_child(title)
 
 	var value := Label.new()
-	value.text = weapon_name
+	value.text = _get_equipped_weapon_name(slot)
 	value.add_theme_font_size_override("font_size", 13)
 	value.clip_text = true
 	rows.add_child(value)
 
 	equipment_root.add_child(slot_panel)
+	_equipment_slot_nodes[slot] = slot_panel
 
 
-func _get_equipped_weapon_name(item_type: StringName) -> String:
-	if _equipment == null:
-		return "Empty"
-
-	var weapon: Resource = null
-	if item_type == &"ranged_weapon" and _equipment.has_method("get_ranged_weapon"):
-		weapon = _equipment.call("get_ranged_weapon") as Resource
-	elif item_type == &"melee_weapon" and _equipment.has_method("get_melee_weapon"):
-		weapon = _equipment.call("get_melee_weapon") as Resource
-
+func _get_equipped_weapon_name(slot: StringName) -> String:
+	var weapon: Resource = _get_equipped_weapon_for_slot(slot)
 	if weapon == null:
+		return "Empty"
+	if _drag_source == DRAG_SOURCE_EQUIPMENT and _drag_equipment_slot == slot:
 		return "Empty"
 
 	return str(weapon.get("display_name"))
+
+
+func _on_equipment_slot_gui_input(event: InputEvent, slot: StringName) -> void:
+	if event is InputEventMouseButton:
+		var mouse_button := event as InputEventMouseButton
+		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
+			_begin_equipment_drag(slot)
+			get_viewport().set_input_as_handled()
+		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
+			_store_equipped_slot(slot)
+			get_viewport().set_input_as_handled()
+
+
+func _begin_equipment_drag(slot: StringName) -> void:
+	if _inventory == null or _equipment == null:
+		return
+
+	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
+	if item_id == &"":
+		return
+
+	var slot_node := _equipment_slot_nodes.get(slot) as Control
+	if slot_node == null:
+		return
+
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	var local_mouse_position: Vector2 = slot_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+	var drag_size: Vector2 = _entry_pixel_size(item_size)
+
+	_drag_source = DRAG_SOURCE_EQUIPMENT
+	_drag_entry_id = -1
+	_drag_equipment_slot = slot
+	_drag_item_id = item_id
+	_drag_cell_offset = Vector2i.ZERO
+	_drag_mouse_offset = Vector2(
+		clampf(local_mouse_position.x, 0.0, drag_size.x),
+		clampf(local_mouse_position.y, 0.0, drag_size.y)
+	)
+
+	_equipment_drag_node = _create_item_panel(definition, 1, item_size, true)
+	_equipment_drag_node.z_index = 30
+	panel.add_child(_equipment_drag_node)
+
+	_refresh_equipment()
+	_update_drag_visual()
+
+
+func _store_equipped_slot(slot: StringName) -> bool:
+	if _inventory == null or _equipment == null:
+		return false
+
+	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
+	if item_id == &"":
+		return false
+
+	if not _inventory.can_add_item(item_id, 1):
+		_show_warning("NO SPACE")
+		return false
+
+	var added_quantity: int = _inventory.add_item(item_id, 1)
+	if added_quantity <= 0:
+		_show_warning("NO SPACE")
+		return false
+
+	_equip_weapon_resource(slot, null)
+	_refresh()
+	return true
+
+
+func _store_equipped_slot_at(slot: StringName, target_cell: Vector2i) -> bool:
+	if _inventory == null or _equipment == null:
+		return false
+
+	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
+	if item_id == &"":
+		return false
+
+	var added_quantity: int = _inventory.add_item_at(item_id, 1, target_cell)
+	if added_quantity <= 0:
+		_show_warning("NO SPACE")
+		return false
+
+	_equip_weapon_resource(slot, null)
+	_refresh()
+	return true
+
+
+func _drop_equipped_slot_to_world(slot: StringName) -> bool:
+	if _equipment == null:
+		return false
+
+	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
+	if item_id == &"":
+		return false
+
+	if not _drop_item_to_world(item_id, 1):
+		return false
+
+	_equip_weapon_resource(slot, null)
+	_refresh()
+	return true
+
+
+func _slot_for_item_type(item_type: StringName) -> StringName:
+	if item_type == &"ranged_weapon":
+		return &"ranged"
+	if item_type == &"melee_weapon":
+		return &"melee"
+
+	return &""
+
+
+func _does_slot_accept_item(slot: StringName, item_id: StringName) -> bool:
+	if item_id == &"":
+		return false
+
+	return _slot_for_item_type(_get_item_type(item_id)) == slot
+
+
+func _get_item_type(item_id: StringName) -> StringName:
+	if _inventory == null:
+		return &""
+
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	return StringName(definition.get("type", &""))
+
+
+func _load_weapon_resource_for_item(item_id: StringName) -> Resource:
+	if _inventory == null:
+		return null
+
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var resource_path: String = str(definition.get("weapon_resource_path", ""))
+	if resource_path.is_empty():
+		return null
+
+	return ResourceLoader.load(resource_path) as Resource
+
+
+func _show_warning(message: String) -> void:
+	if warning_label == null:
+		return
+
+	if _warning_tween != null:
+		_warning_tween.kill()
+
+	warning_label.text = message
+	warning_label.modulate = Color(1.0, 0.42, 0.32, 1.0)
+	_warning_tween = create_tween()
+	_warning_tween.tween_interval(1.35)
+	_warning_tween.tween_property(warning_label, "modulate:a", 0.0, 0.35)
+	_warning_tween.tween_callback(Callable(self, "_clear_warning"))
+
+
+func _clear_warning() -> void:
+	if warning_label == null:
+		return
+
+	warning_label.text = ""
+	warning_label.modulate.a = 1.0
 
 
 func _entry_pixel_size(entry_size: Vector2i) -> Vector2:
