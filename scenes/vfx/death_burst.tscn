@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/combat/burst_vfx.gd" id="1_burst_vfx"]
+
+[node name="DeathBurst" type="Node2D"]
+script = ExtResource("1_burst_vfx")
+particle_count = 22
+min_speed = 60.0
+max_speed = 185.0
+lifetime = 0.58
+particle_size = Vector2(3, 3)
+burst_color = Color(0.68, 0.01, 0.015, 1)
+gravity = 125.0

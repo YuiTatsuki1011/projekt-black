@@ -31,6 +31,8 @@ func _physics_process(delta: float) -> void:
 func _on_body_entered(_body: Node) -> void:
 	var health: Node = _find_health(_body)
 	if health != null:
+		if _body.has_method("apply_hit_reaction"):
+			_body.call("apply_hit_reaction", _velocity.normalized(), damage, global_position)
 		health.apply_damage(damage)
 
 	queue_free()

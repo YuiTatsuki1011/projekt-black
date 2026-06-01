@@ -17,6 +17,7 @@ res://
     interaction/
     levels/
     ui/
+    vfx/
   scripts/
     player/
     enemies/
@@ -50,6 +51,7 @@ res://
 - `scenes/interaction/`: ボタン、ドア、アイテムなど、Wキーで操作できる部品。
 - `scenes/levels/`: テストマップや部屋。
 - `scenes/ui/`: HUD、メニュー、インベントリ画面。
+- `scenes/vfx/`: 命中、死亡、煙、火花などの演出。
 
 ## Scripts
 
@@ -98,3 +100,12 @@ res://
 - Layer 3 `player_projectile`: プレイヤーの弾。
 - Layer 4 `enemy`: 敵。
 - Layer 5 `interaction`: Wキーで操作できるボタンなど。
+
+## Combat Feedback
+
+戦闘の反応は、まず仮素材で分かりやすく作ります。
+
+- `Health`: HP管理と、HP変化、被ダメージ、死亡の通知。
+- `Projectile`: 命中した相手の `Health` を探してダメージを与える。
+- 敵スクリプト: 命中時の点滅、ノックバック、VFX生成、死亡処理を担当する。
+- `BurstVfx`: 仮の赤い破片演出。正式な血液スプライトに差し替える前の確認用。

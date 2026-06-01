@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/combat/burst_vfx.gd" id="1_burst_vfx"]
+
+[node name="HitBurst" type="Node2D"]
+script = ExtResource("1_burst_vfx")
+particle_count = 8
+min_speed = 35.0
+max_speed = 105.0
+lifetime = 0.28
+particle_size = Vector2(2, 2)
+burst_color = Color(0.82, 0.02, 0.02, 1)
+gravity = 75.0

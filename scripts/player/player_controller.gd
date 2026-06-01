@@ -20,6 +20,7 @@ const ENEMY_COLLISION_MASK: int = 8
 @export var recoil_amount: float = 0.18
 @export var recoil_recovery_speed: float = 8.0
 @export var aim_flip_dead_zone: float = 12.0
+@export var damage_flash_time: float = 0.12
 @export var projectile_scene: PackedScene
 
 @onready var body_root: Node2D = $VisualRoot/BodyRoot
@@ -45,6 +46,7 @@ var _is_dead: bool = false
 var _facing: int = 1
 var _recoil: float = 0.0
 var _nearby_interactables: Array[Node2D] = []
+var _damage_flash_tween: Tween
 
 
 func _ready() -> void:
@@ -53,6 +55,7 @@ func _ready() -> void:
 	current_ammo = magazine_size
 	reserve_ammo = starting_reserve_ammo
 	_configure_aim_bones()
+	health.damaged.connect(_on_damaged)
 	health.died.connect(_on_died)
 	interaction_area.area_entered.connect(_on_interaction_area_entered)
 	interaction_area.area_exited.connect(_on_interaction_area_exited)
@@ -261,6 +264,9 @@ func _try_apply_close_barrel_hit() -> bool:
 	if health_node == null:
 		return false
 
+	if collider.has_method("apply_hit_reaction"):
+		var shot_direction := muzzle.global_transform.x.normalized()
+		collider.call("apply_hit_reaction", shot_direction, bullet_damage, result.get("position", muzzle.global_position))
 	health_node.apply_damage(bullet_damage)
 	return true
 
@@ -297,3 +303,17 @@ func _on_died() -> void:
 	body_root.modulate = Color(0.35, 0.35, 0.35, 1.0)
 	arm_rig.visible = false
 	died.emit()
+
+
+func _on_damaged(_amount: int, _current_health: int, _max_health: int) -> void:
+	if _is_dead:
+		return
+
+	if _damage_flash_tween != null:
+		_damage_flash_tween.kill()
+
+	body_root.modulate = Color(1.0, 0.45, 0.42, 1.0)
+	arm_rig.modulate = Color(1.0, 0.45, 0.42, 1.0)
+	_damage_flash_tween = create_tween()
+	_damage_flash_tween.tween_property(body_root, "modulate", Color.WHITE, damage_flash_time)
+	_damage_flash_tween.parallel().tween_property(arm_rig, "modulate", Color.WHITE, damage_flash_time)

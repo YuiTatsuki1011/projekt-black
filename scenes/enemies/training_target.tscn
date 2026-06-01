@@ -1,8 +1,10 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/enemies/training_target.gd" id="1_training_target"]
 [ext_resource type="Script" path="res://scripts/combat/health.gd" id="2_health"]
 [ext_resource type="PackedScene" path="res://scenes/ui/health_indicator.tscn" id="3_health_indicator"]
+[ext_resource type="PackedScene" path="res://scenes/vfx/hit_burst.tscn" id="4_hit_burst"]
+[ext_resource type="PackedScene" path="res://scenes/vfx/death_burst.tscn" id="5_death_burst"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_target"]
 size = Vector2(24, 48)
@@ -11,6 +13,8 @@ size = Vector2(24, 48)
 collision_layer = 8
 collision_mask = 1
 script = ExtResource("1_training_target")
+hit_vfx_scene = ExtResource("4_hit_burst")
+death_vfx_scene = ExtResource("5_death_burst")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 position = Vector2(0, -24)
