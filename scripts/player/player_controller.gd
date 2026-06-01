@@ -6,7 +6,8 @@ signal fired(ammo_remaining: int)
 signal reload_started(duration: float)
 signal interact_requested
 signal died
-signal stamina_changed(current_stamina: float, max_stamina: float, overheated: bool)
+signal stamina_changed(current_stamina: float, max_stamina: float, overheated: bool, melee_available: bool)
+signal stamina_use_failed
 
 const ENEMY_COLLISION_MASK: int = 8
 
@@ -34,9 +35,11 @@ enum MeleeState {
 @export var damage_knockback_recovery: float = 520.0
 @export var max_stamina: float = 90.0
 @export var melee_stamina_cost: float = 30.0
+@export var melee_min_stamina_to_use: float = 15.0
 @export var stamina_recovery_rate: float = 42.0
 @export var overheat_recovery_rate: float = 32.0
 @export var stamina_recovery_delay: float = 0.55
+@export var stamina_empty_hold_time: float = 2.0
 @export var melee_lunge_speed: float = 250.0
 @export var melee_lunge_time: float = 0.13
 @export var melee_strike_time: float = 0.11
@@ -112,7 +115,7 @@ func _ready() -> void:
 	_set_melee_visual(false)
 	_update_arm_anchor()
 	ammo_changed.emit(current_ammo, reserve_ammo)
-	stamina_changed.emit(current_stamina, max_stamina, is_stamina_overheated)
+	_emit_stamina_changed()
 
 
 func _physics_process(delta: float) -> void:
@@ -387,7 +390,11 @@ func _handle_melee_input() -> void:
 
 
 func _try_start_melee_attack() -> void:
-	if is_stamina_overheated or current_stamina < melee_stamina_cost or not is_on_floor():
+	if not is_on_floor():
+		return
+
+	if not _can_use_melee_stamina():
+		stamina_use_failed.emit()
 		return
 
 	_current_melee_step = clampi(_melee_combo_step, 0, 2)
@@ -494,16 +501,27 @@ func _get_melee_damage() -> int:
 
 
 func _consume_stamina(amount: float) -> void:
-	_set_stamina(current_stamina - amount)
-	_stamina_recovery_delay_remaining = stamina_recovery_delay
-	if current_stamina <= 0.0:
+	var next_stamina: float = current_stamina - amount
+	if next_stamina <= 0.0:
 		is_stamina_overheated = true
+		_stamina_recovery_delay_remaining = stamina_empty_hold_time
 		_set_stamina(0.0)
+	else:
+		_stamina_recovery_delay_remaining = stamina_recovery_delay
+		_set_stamina(next_stamina)
 
 
 func _set_stamina(value: float) -> void:
 	current_stamina = clampf(value, 0.0, max_stamina)
-	stamina_changed.emit(current_stamina, max_stamina, is_stamina_overheated)
+	_emit_stamina_changed()
+
+
+func _emit_stamina_changed() -> void:
+	stamina_changed.emit(current_stamina, max_stamina, is_stamina_overheated, _can_use_melee_stamina())
+
+
+func _can_use_melee_stamina() -> bool:
+	return not is_stamina_overheated and current_stamina >= melee_min_stamina_to_use
 
 
 func _set_melee_visual(visible: bool) -> void:
