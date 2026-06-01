@@ -18,7 +18,7 @@ const ITEM_BORDER_COLOR := Color(0.9, 0.92, 0.84, 1.0)
 var _inventory: Node
 var _item_nodes: Dictionary = {}
 var _drag_entry_id: int = -1
-var _drag_mouse_offset: Vector2 = Vector2.ZERO
+var _drag_cell_offset: Vector2i = Vector2i.ZERO
 
 
 func _ready() -> void:
@@ -138,7 +138,7 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	label.offset_bottom = -2.0
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.text = _get_item_label(definition, quantity)
+	label.text = _get_item_label(definition, quantity, size)
 	label.add_theme_font_size_override("font_size", 9)
 	item_panel.add_child(label)
 
@@ -160,7 +160,13 @@ func _begin_drag(entry_id: int) -> void:
 
 	_drag_entry_id = entry_id
 	var item_node := _item_nodes[entry_id] as Control
-	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
+	var entry: Dictionary = _inventory.get_entry(entry_id)
+	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
+	var local_mouse_position: Vector2 = item_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+	_drag_cell_offset = Vector2i(
+		clampi(floori(local_mouse_position.x / CELL_PITCH), 0, entry_size.x - 1),
+		clampi(floori(local_mouse_position.y / CELL_PITCH), 0, entry_size.y - 1)
+	)
 	_refresh()
 
 
@@ -169,11 +175,11 @@ func _update_drag_visual() -> void:
 		return
 
 	var item_node := _item_nodes[_drag_entry_id] as Control
-	item_node.global_position = get_viewport().get_mouse_position() - _drag_mouse_offset
-
-	var target_cell: Vector2i = _global_to_grid(item_node.global_position)
+	var target_cell: Vector2i = _get_drag_target_cell()
 	var entry: Dictionary = _inventory.get_entry(_drag_entry_id)
 	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
+
+	item_node.position = _grid_to_local(target_cell)
 	preview.visible = true
 	preview.position = _grid_to_local(target_cell)
 	preview.size = _entry_pixel_size(entry_size)
@@ -187,8 +193,7 @@ func _finish_drag() -> void:
 
 	var target_cell := Vector2i.ZERO
 	if _item_nodes.has(_drag_entry_id):
-		var item_node := _item_nodes[_drag_entry_id] as Control
-		target_cell = _global_to_grid(item_node.global_position)
+		target_cell = _get_drag_target_cell()
 
 	_inventory.move_entry(_drag_entry_id, target_cell)
 	_cancel_drag()
@@ -197,7 +202,7 @@ func _finish_drag() -> void:
 
 func _cancel_drag() -> void:
 	_drag_entry_id = -1
-	_drag_mouse_offset = Vector2.ZERO
+	_drag_cell_offset = Vector2i.ZERO
 	preview.visible = false
 
 
@@ -210,6 +215,10 @@ func _global_to_grid(global_position: Vector2) -> Vector2i:
 	return Vector2i(floori(local_position.x / CELL_PITCH), floori(local_position.y / CELL_PITCH))
 
 
+func _get_drag_target_cell() -> Vector2i:
+	return _global_to_grid(get_viewport().get_mouse_position()) - _drag_cell_offset
+
+
 func _entry_pixel_size(entry_size: Vector2i) -> Vector2:
 	return Vector2(
 		entry_size.x * CELL_PITCH - CELL_GAP,
@@ -217,9 +226,11 @@ func _entry_pixel_size(entry_size: Vector2i) -> Vector2:
 	)
 
 
-func _get_item_label(definition: Dictionary, quantity: int) -> String:
+func _get_item_label(definition: Dictionary, quantity: int, entry_size: Vector2i) -> String:
 	var item_name: String = str(definition.get("short_name", definition.get("name", "Item")))
 	if quantity > 1:
+		if entry_size.x >= 2:
+			return "%s x%d" % [item_name, quantity]
 		return "%s\nx%d" % [item_name, quantity]
 	return item_name
 

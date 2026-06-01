@@ -124,7 +124,7 @@ res://
 ## Inventory
 
 `Inventory` は、アイテムID、所持数、グリッド上の配置を記録する部品です。
-現在はプレイヤーの `Inventory` ノードで10x6マスのグリッドを管理し、`pistol_ammo` を配置します。
+現在はプレイヤーの `Inventory` ノードで10x6マスのグリッドを管理し、`pistol_ammo` を2x1マスのアイテムとして配置します。
 リロード時はグリッド上の `pistol_ammo` から弾薬を消費します。
 
 - `get_quantity(item_id)`: 指定アイテムの所持数を返す。
