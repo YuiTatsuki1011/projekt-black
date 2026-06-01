@@ -7,10 +7,11 @@ signal grid_changed
 const ITEM_DEFINITIONS: Dictionary = {
 	&"pistol_ammo": {
 		"name": "Pistol Ammo",
+		"short_name": "Ammo",
 		"size": Vector2i(1, 1),
 		"stackable": true,
 		"max_stack": 60,
-		"color": Color(0.25, 0.48, 0.64, 1.0),
+		"color": Color(0.28, 0.56, 0.76, 1.0),
 	},
 }
 

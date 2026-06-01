@@ -4,6 +4,9 @@ class_name InventoryScreen
 const CELL_SIZE: int = 48
 const CELL_GAP: int = 2
 const CELL_PITCH: int = CELL_SIZE + CELL_GAP
+const CELL_COLOR := Color(0.16, 0.17, 0.19, 1.0)
+const CELL_BORDER_COLOR := Color(0.36, 0.38, 0.42, 1.0)
+const ITEM_BORDER_COLOR := Color(0.9, 0.92, 0.84, 1.0)
 
 @export var player_path: NodePath = NodePath("../Player")
 
@@ -75,11 +78,11 @@ func _build_grid_cells() -> void:
 
 	for y in grid_size.y:
 		for x in grid_size.x:
-			var cell := ColorRect.new()
+			var cell := Panel.new()
 			cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			cell.position = Vector2(x * CELL_PITCH, y * CELL_PITCH)
 			cell.size = Vector2(CELL_SIZE, CELL_SIZE)
-			cell.color = Color(0.09, 0.095, 0.105, 0.95)
+			cell.add_theme_stylebox_override("panel", _make_flat_style(CELL_COLOR, CELL_BORDER_COLOR, 1))
 			cells_root.add_child(cell)
 
 
@@ -112,30 +115,31 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	var quantity: int = int(entry.get("quantity", 1))
 	var definition: Dictionary = _inventory.get_item_definition(item_id)
 
-	var item_panel := PanelContainer.new()
+	var item_panel := Panel.new()
 	item_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	item_panel.position = _grid_to_local(position)
 	item_panel.size = _entry_pixel_size(size)
+	item_panel.custom_minimum_size = Vector2.ZERO
+	item_panel.clip_contents = true
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
-
-	var style := StyleBoxFlat.new()
-	style.bg_color = definition.get("color", Color(0.44, 0.44, 0.46, 1.0))
-	style.border_color = Color(0.82, 0.82, 0.74, 1.0)
-	style.border_width_left = 2
-	style.border_width_top = 2
-	style.border_width_right = 2
-	style.border_width_bottom = 2
-	item_panel.add_theme_stylebox_override("panel", style)
+	item_panel.add_theme_stylebox_override("panel", _make_flat_style(
+		definition.get("color", Color(0.44, 0.44, 0.46, 1.0)),
+		ITEM_BORDER_COLOR,
+		2
+	))
 
 	var label := Label.new()
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	label.offset_left = 2.0
+	label.offset_top = 2.0
+	label.offset_right = -2.0
+	label.offset_bottom = -2.0
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	label.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	label.text = _get_item_label(definition, quantity)
-	label.add_theme_font_size_override("font_size", 11)
+	label.add_theme_font_size_override("font_size", 9)
 	item_panel.add_child(label)
 
 	items_root.add_child(item_panel)
@@ -214,10 +218,25 @@ func _entry_pixel_size(entry_size: Vector2i) -> Vector2:
 
 
 func _get_item_label(definition: Dictionary, quantity: int) -> String:
-	var item_name: String = str(definition.get("name", "Item"))
+	var item_name: String = str(definition.get("short_name", definition.get("name", "Item")))
 	if quantity > 1:
 		return "%s\nx%d" % [item_name, quantity]
 	return item_name
+
+
+func _make_flat_style(background_color: Color, border_color: Color, border_width: int) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = background_color
+	style.border_color = border_color
+	style.border_width_left = border_width
+	style.border_width_top = border_width
+	style.border_width_right = border_width
+	style.border_width_bottom = border_width
+	style.content_margin_left = 0.0
+	style.content_margin_top = 0.0
+	style.content_margin_right = 0.0
+	style.content_margin_bottom = 0.0
+	return style
 
 
 func _clear_children(parent: Node) -> void:

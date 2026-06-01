@@ -1,6 +1,14 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=3 format=3]
 
 [ext_resource type="Script" path="res://scripts/ui/inventory_screen.gd" id="1_inventory_screen"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_inventory_panel"]
+bg_color = Color(0.105, 0.11, 0.125, 0.96)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.42, 0.44, 0.48, 1)
 
 [node name="InventoryScreen" type="CanvasLayer"]
 visible = false
@@ -22,7 +30,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-color = Color(0.015, 0.014, 0.014, 0.72)
+color = Color(0.025, 0.025, 0.028, 0.42)
 mouse_filter = 2
 
 [node name="Panel" type="PanelContainer" parent="Root"]
@@ -32,6 +40,7 @@ offset_top = 230.0
 offset_right = 1240.0
 offset_bottom = 610.0
 mouse_filter = 0
+theme_override_styles/panel = SubResource("StyleBoxFlat_inventory_panel")
 
 [node name="Margin" type="MarginContainer" parent="Root/Panel"]
 layout_mode = 2
