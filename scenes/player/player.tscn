@@ -55,7 +55,7 @@ current_health = 100
 
 [node name="Equipment" type="Node" parent="."]
 script = ExtResource("8_equipment")
-ranged_weapon = ExtResource("9_basic_pistol")
+firearm_slot_1 = ExtResource("9_basic_pistol")
 melee_weapon = ExtResource("10_field_knife")
 
 [node name="Inventory" type="Node" parent="."]

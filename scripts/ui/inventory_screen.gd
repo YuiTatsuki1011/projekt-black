@@ -11,6 +11,7 @@ const PLACEABLE_COLOR := Color(0.18, 0.82, 0.35, 0.42)
 const BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.5)
 const SLOT_COLOR := Color(0.12, 0.13, 0.15, 1.0)
 const SLOT_BORDER_COLOR := Color(0.42, 0.44, 0.48, 1.0)
+const SLOT_ACTIVE_BORDER_COLOR := Color(0.44, 0.9, 0.55, 1.0)
 const SLOT_PLACEABLE_COLOR := Color(0.18, 0.82, 0.35, 0.32)
 const SLOT_BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.34)
 const DETAIL_PANEL_SIZE := Vector2(306, 318)
@@ -25,6 +26,7 @@ const DETAIL_EQUIPPED_COLOR := Color(0.42, 0.96, 0.56, 1.0)
 const DRAG_SOURCE_NONE := &""
 const DRAG_SOURCE_INVENTORY := &"inventory"
 const DRAG_SOURCE_EQUIPMENT := &"equipment"
+const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
 
 @export var player_path: NodePath = NodePath("../Player")
 @export var dropped_item_scene: PackedScene
@@ -278,7 +280,9 @@ func _finish_drag() -> void:
 		elif not _is_mouse_inside_inventory_frame():
 			_drop_dragged_inventory_entry_to_world()
 	elif _drag_source == DRAG_SOURCE_EQUIPMENT:
-		if _is_mouse_inside_grid():
+		if target_slot != &"":
+			_move_equipped_slot_to_slot(_drag_equipment_slot, target_slot)
+		elif _is_mouse_inside_grid():
 			_store_equipped_slot_at(_drag_equipment_slot, target_cell, _drag_item_size)
 		elif not _is_mouse_inside_inventory_frame():
 			_drop_equipped_slot_to_world(_drag_equipment_slot)
@@ -499,11 +503,8 @@ func _try_quick_equip_entry(entry_id: int) -> bool:
 	var item_id: StringName = entry.get("item_id", &"")
 	var definition: Dictionary = _inventory.get_item_definition(item_id)
 	var item_type: StringName = definition.get("type", &"")
-	var target_slot: StringName = _slot_for_item_type(item_type)
+	var target_slot: StringName = _get_quick_equip_slot_for_item_type(item_type)
 	if target_slot == &"":
-		return false
-
-	if _get_equipped_item_id_for_slot(target_slot) != &"":
 		return false
 
 	return _equip_inventory_entry_to_slot(entry_id, target_slot)
@@ -594,15 +595,17 @@ func _refresh_equipment(_slot: StringName = &"") -> void:
 
 	_clear_children(equipment_root)
 	_equipment_slot_nodes.clear()
-	_add_equipment_slot(&"ranged", "FIREARM")
-	_add_equipment_slot(&"melee", "MELEE")
+	for slot_index in FIREARM_SLOT_IDS.size():
+		_add_equipment_slot(FIREARM_SLOT_IDS[slot_index], "FIREARM %d" % [slot_index + 1])
+	_add_equipment_slot(&"melee", "SUB")
 
 
 func _add_equipment_slot(slot: StringName, slot_name: String) -> void:
 	var slot_panel := Panel.new()
 	slot_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	slot_panel.custom_minimum_size = Vector2(243, 62)
-	slot_panel.add_theme_stylebox_override("panel", _make_flat_style(SLOT_COLOR, SLOT_BORDER_COLOR, 1))
+	slot_panel.custom_minimum_size = Vector2(92, 62) if _is_firearm_slot(slot) else Vector2(104, 62)
+	var border_color := SLOT_ACTIVE_BORDER_COLOR if _is_active_firearm_slot(slot) else SLOT_BORDER_COLOR
+	slot_panel.add_theme_stylebox_override("panel", _make_flat_style(SLOT_COLOR, border_color, 1))
 	slot_panel.gui_input.connect(_on_equipment_slot_gui_input.bind(slot))
 	slot_panel.mouse_entered.connect(_show_equipment_slot_details.bind(slot))
 	slot_panel.mouse_exited.connect(_hide_detail_panel)
@@ -625,13 +628,13 @@ func _add_equipment_slot(slot: StringName, slot_name: String) -> void:
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title.text = slot_name
 	title.add_theme_font_size_override("font_size", 9)
-	title.modulate = Color(0.68, 0.70, 0.74, 1.0)
+	title.modulate = SLOT_ACTIVE_BORDER_COLOR if _is_active_firearm_slot(slot) else Color(0.68, 0.70, 0.74, 1.0)
 	rows.add_child(title)
 
 	var value := Label.new()
 	value.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	value.text = _get_equipped_weapon_name(slot)
-	value.add_theme_font_size_override("font_size", 13)
+	value.add_theme_font_size_override("font_size", 11 if _is_firearm_slot(slot) else 13)
 	value.clip_text = true
 	rows.add_child(value)
 
@@ -754,9 +757,76 @@ func _drop_equipped_slot_to_world(slot: StringName) -> bool:
 	return true
 
 
+func _move_equipped_slot_to_slot(source_slot: StringName, target_slot: StringName) -> bool:
+	if _equipment == null or source_slot == target_slot:
+		return false
+
+	var source_weapon := _get_equipped_weapon_for_slot(source_slot)
+	if source_weapon == null:
+		return false
+
+	var source_item_id := StringName(source_weapon.get("weapon_id"))
+	if not _does_slot_accept_item(target_slot, source_item_id):
+		_show_warning("WRONG SLOT")
+		return false
+
+	var target_weapon := _get_equipped_weapon_for_slot(target_slot)
+	if target_weapon != null:
+		var target_item_id := StringName(target_weapon.get("weapon_id"))
+		if not _does_slot_accept_item(source_slot, target_item_id):
+			_show_warning("WRONG SLOT")
+			return false
+
+	_equip_weapon_resource(source_slot, target_weapon)
+	_equip_weapon_resource(target_slot, source_weapon)
+	_refresh()
+	return true
+
+
+func _is_firearm_slot(slot: StringName) -> bool:
+	return slot in FIREARM_SLOT_IDS or slot == &"ranged"
+
+
+func _get_active_firearm_slot() -> StringName:
+	if _equipment != null and _equipment.has_method("get_active_firearm_slot"):
+		return StringName(_equipment.call("get_active_firearm_slot"))
+
+	return &"firearm_1"
+
+
+func _is_active_firearm_slot(slot: StringName) -> bool:
+	return _is_firearm_slot(slot) and slot == _get_active_firearm_slot()
+
+
+func _get_quick_equip_slot_for_item_type(item_type: StringName) -> StringName:
+	if item_type == &"ranged_weapon":
+		var active_slot := _get_active_firearm_slot()
+		if active_slot != &"" and _get_equipped_item_id_for_slot(active_slot) == &"":
+			return active_slot
+
+		for slot in FIREARM_SLOT_IDS:
+			if _get_equipped_item_id_for_slot(slot) == &"":
+				return slot
+		return &""
+
+	if item_type == &"melee_weapon":
+		return &"melee" if _get_equipped_item_id_for_slot(&"melee") == &"" else &""
+
+	return &""
+
+
+func _get_comparison_slot_for_item_type(item_type: StringName) -> StringName:
+	if item_type == &"ranged_weapon":
+		return _get_active_firearm_slot()
+	if item_type == &"melee_weapon":
+		return &"melee"
+
+	return &""
+
+
 func _slot_for_item_type(item_type: StringName) -> StringName:
 	if item_type == &"ranged_weapon":
-		return &"ranged"
+		return _get_active_firearm_slot()
 	if item_type == &"melee_weapon":
 		return &"melee"
 
@@ -767,7 +837,13 @@ func _does_slot_accept_item(slot: StringName, item_id: StringName) -> bool:
 	if item_id == &"":
 		return false
 
-	return _slot_for_item_type(_get_item_type(item_id)) == slot
+	var item_type := _get_item_type(item_id)
+	if item_type == &"ranged_weapon":
+		return _is_firearm_slot(slot)
+	if item_type == &"melee_weapon":
+		return slot == &"melee"
+
+	return false
 
 
 func _get_item_type(item_id: StringName) -> StringName:
@@ -863,7 +939,7 @@ func _show_item_details(
 	var item_type: StringName = _get_item_type(item_id)
 	var weapon: Resource = _load_weapon_resource_for_item(item_id)
 	var compare_weapon: Resource = null
-	var compare_slot: StringName = _slot_for_item_type(item_type)
+	var compare_slot: StringName = _get_comparison_slot_for_item_type(item_type)
 	if compare_to_equipped:
 		if compare_slot != &"":
 			compare_weapon = _get_equipped_weapon_for_slot(compare_slot)
@@ -1256,8 +1332,11 @@ func _resolve_display_size(definition: Dictionary, display_size: Vector2i) -> Ve
 func _get_slot_display_name(slot: StringName) -> String:
 	if slot == &"ranged":
 		return "Firearm"
+	for slot_index in FIREARM_SLOT_IDS.size():
+		if slot == FIREARM_SLOT_IDS[slot_index]:
+			return "Firearm %d" % [slot_index + 1]
 	if slot == &"melee":
-		return "Melee"
+		return "Sub"
 
 	return "Slot"
 

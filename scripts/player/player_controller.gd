@@ -10,6 +10,7 @@ signal stamina_changed(current_stamina: float, max_stamina: float, overheated: b
 signal stamina_use_failed
 
 const ENEMY_COLLISION_MASK: int = 8
+const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
 
 enum MeleeState {
 	READY,
@@ -20,7 +21,7 @@ enum MeleeState {
 
 @export var walk_speed: float = 160.0
 @export var crouch_speed_multiplier: float = 0.45
-@export var sub_weapon_aim_speed_multiplier: float = 0.72
+@export var sub_weapon_aim_speed_multiplier: float = 0.58
 @export var jump_velocity: float = -360.0
 @export var bullet_damage: int = 10
 @export var magazine_size: int = 6
@@ -106,6 +107,10 @@ var _afterimage_timer: float = 0.0
 var _suppress_inventory_ammo_signal: bool = false
 var _has_ranged_weapon: bool = true
 var _has_melee_weapon: bool = true
+var _active_firearm_slot: StringName = &"firearm_1"
+var _firearm_ammo_by_slot: Dictionary = {}
+var _firearm_weapon_id_by_slot: Dictionary = {}
+var _firearm_slot_input_was_pressed: Array[bool] = [false, false, false, false]
 var _is_sub_weapon_aiming: bool = false
 var _sub_weapon_fire_was_pressed: bool = false
 var _melee_combo_damages: PackedInt32Array = PackedInt32Array([34, 48, 68])
@@ -115,7 +120,8 @@ func _ready() -> void:
 	if ProjectSettings.has_setting("physics/2d/default_gravity"):
 		_gravity = float(ProjectSettings.get_setting("physics/2d/default_gravity"))
 	_apply_equipment_stats()
-	current_ammo = magazine_size if _has_ranged_weapon else 0
+	_sync_all_firearm_slot_caches()
+	_load_active_firearm_ammo()
 	if equipment != null and equipment.has_signal("equipment_changed"):
 		equipment.connect("equipment_changed", Callable(self, "_on_equipment_changed"))
 	inventory.item_quantity_changed.connect(_on_inventory_item_quantity_changed)
@@ -139,6 +145,7 @@ func _apply_equipment_stats() -> void:
 	if equipment == null:
 		return
 
+	_active_firearm_slot = _get_active_firearm_slot_from_equipment()
 	if equipment.has_method("get_ranged_weapon"):
 		var ranged_weapon: Resource = equipment.call("get_ranged_weapon") as Resource
 		if ranged_weapon != null:
@@ -223,15 +230,96 @@ func _get_resource_value(resource: Resource, property_name: StringName, fallback
 	return value
 
 
+func _get_active_firearm_slot_from_equipment() -> StringName:
+	if equipment != null and equipment.has_method("get_active_firearm_slot"):
+		return StringName(equipment.call("get_active_firearm_slot"))
+
+	return &"firearm_1"
+
+
+func _is_firearm_slot(slot: StringName) -> bool:
+	return slot in FIREARM_SLOT_IDS
+
+
+func _is_firearm_equipment_event(slot: StringName) -> bool:
+	return slot == &"ranged" or _is_firearm_slot(slot)
+
+
+func _get_equipped_firearm_for_slot(slot: StringName) -> Resource:
+	if equipment == null:
+		return null
+
+	if equipment.has_method("get_weapon"):
+		return equipment.call("get_weapon", slot) as Resource
+
+	if slot == &"firearm_1" and equipment.has_method("get_ranged_weapon"):
+		return equipment.call("get_ranged_weapon") as Resource
+
+	return null
+
+
+func _get_weapon_id(weapon: Resource) -> StringName:
+	if weapon == null:
+		return &""
+
+	return StringName(str(weapon.get("weapon_id")))
+
+
+func _get_weapon_magazine_size(weapon: Resource) -> int:
+	if weapon == null:
+		return 0
+
+	return int(_get_resource_value(weapon, &"magazine_size", 0))
+
+
+func _sync_all_firearm_slot_caches() -> void:
+	for slot in FIREARM_SLOT_IDS:
+		_sync_firearm_slot_cache(slot)
+
+
+func _sync_firearm_slot_cache(slot: StringName) -> void:
+	var weapon := _get_equipped_firearm_for_slot(slot)
+	if weapon == null:
+		_firearm_ammo_by_slot.erase(slot)
+		_firearm_weapon_id_by_slot.erase(slot)
+		return
+
+	var weapon_id := _get_weapon_id(weapon)
+	if _firearm_weapon_id_by_slot.get(slot, &"") == weapon_id:
+		return
+
+	_firearm_weapon_id_by_slot[slot] = weapon_id
+	_firearm_ammo_by_slot[slot] = _get_weapon_magazine_size(weapon)
+
+
+func _save_active_firearm_ammo() -> void:
+	if _active_firearm_slot == &"" or not _has_ranged_weapon:
+		return
+
+	_firearm_ammo_by_slot[_active_firearm_slot] = current_ammo
+
+
+func _load_active_firearm_ammo() -> void:
+	if not _has_ranged_weapon:
+		current_ammo = 0
+		return
+
+	if not _firearm_ammo_by_slot.has(_active_firearm_slot):
+		_firearm_ammo_by_slot[_active_firearm_slot] = magazine_size
+
+	current_ammo = mini(int(_firearm_ammo_by_slot.get(_active_firearm_slot, magazine_size)), magazine_size)
+
+
 func _on_equipment_changed(slot: StringName) -> void:
-	var had_ranged_weapon := _has_ranged_weapon
+	var is_firearm_event := _is_firearm_equipment_event(slot)
+	if is_firearm_event:
+		_save_active_firearm_ammo()
+		_sync_all_firearm_slot_caches()
+
 	_apply_equipment_stats()
 
-	if slot == &"ranged":
-		if _has_ranged_weapon:
-			current_ammo = mini(current_ammo, magazine_size) if had_ranged_weapon else magazine_size
-		else:
-			current_ammo = 0
+	if is_firearm_event:
+		_load_active_firearm_ammo()
 		_is_reloading = false
 		_reload_remaining = 0.0
 		_sync_reserve_ammo()
@@ -335,6 +423,7 @@ func _handle_actions() -> void:
 	if Input.is_action_just_pressed("dodge"):
 		_try_start_dodge()
 
+	_handle_firearm_slot_inputs()
 	_update_sub_weapon_aiming()
 
 	var sub_weapon_modifier_pressed := (
@@ -361,6 +450,20 @@ func _handle_actions() -> void:
 
 	if not sub_weapon_modifier_pressed and fire_pressed:
 		_try_fire()
+
+
+func _handle_firearm_slot_inputs() -> void:
+	if equipment == null or not equipment.has_method("select_firearm_slot"):
+		return
+
+	for slot_index in range(1, FIREARM_SLOT_IDS.size() + 1):
+		var action_name := "weapon_slot_%d" % slot_index
+		var is_pressed := Input.is_action_pressed(action_name)
+		var was_pressed := _firearm_slot_input_was_pressed[slot_index - 1]
+		_firearm_slot_input_was_pressed[slot_index - 1] = is_pressed
+		if is_pressed and not was_pressed:
+			equipment.call("select_firearm_slot", slot_index)
+			return
 
 
 func _update_aim(delta: float) -> void:
@@ -446,6 +549,7 @@ func _finish_reload() -> void:
 	var ammo_needed: int = magazine_size - current_ammo
 	var ammo_to_load: int = mini(inventory.get_quantity(ammo_item_id), ammo_needed)
 	current_ammo += ammo_to_load
+	_save_active_firearm_ammo()
 	_suppress_inventory_ammo_signal = true
 	inventory.remove_item(ammo_item_id, ammo_to_load)
 	_suppress_inventory_ammo_signal = false
@@ -769,6 +873,7 @@ func _configure_aim_bones() -> void:
 
 func _consume_round() -> void:
 	current_ammo -= 1
+	_save_active_firearm_ammo()
 	_fire_cooldown_remaining = fire_cooldown
 	_recoil = recoil_amount
 	fired.emit(current_ammo)
@@ -776,7 +881,7 @@ func _consume_round() -> void:
 
 
 func _sync_reserve_ammo(should_emit: bool = true) -> void:
-	reserve_ammo = inventory.get_quantity(ammo_item_id)
+	reserve_ammo = inventory.get_quantity(ammo_item_id) if _has_ranged_weapon else 0
 	if should_emit:
 		ammo_changed.emit(current_ammo, reserve_ammo)
 
