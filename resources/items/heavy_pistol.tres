@@ -1,0 +1,16 @@
+[gd_resource type="Resource" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/inventory/inventory_item_data.gd" id="1_item_data"]
+[ext_resource type="Resource" path="res://resources/weapons/heavy_pistol.tres" id="2_weapon"]
+
+[resource]
+script = ExtResource("1_item_data")
+item_id = &"heavy_pistol"
+display_name = "Heavy Pistol"
+short_name = "Heavy"
+size = Vector2i(2, 2)
+stackable = false
+max_stack = 1
+color = Color(0.42, 0.3, 0.22, 1)
+item_type = "ranged_weapon"
+weapon_resource = ExtResource("2_weapon")

@@ -4,50 +4,14 @@ class_name Inventory
 signal item_quantity_changed(item_id: StringName, quantity: int)
 signal grid_changed
 
-const ITEM_DEFINITIONS: Dictionary = {
-	&"pistol_ammo": {
-		"name": "Pistol Ammo",
-		"short_name": "Ammo",
-		"size": Vector2i(2, 1),
-		"stackable": true,
-		"max_stack": 60,
-		"color": Color(0.28, 0.56, 0.76, 1.0),
-	},
-	&"basic_pistol": {
-		"name": "Basic Pistol",
-		"short_name": "Pistol",
-		"size": Vector2i(2, 2),
-		"stackable": false,
-		"max_stack": 1,
-		"color": Color(0.30, 0.32, 0.36, 1.0),
-		"type": &"ranged_weapon",
-		"weapon_resource_path": "res://resources/weapons/basic_pistol.tres",
-	},
-	&"heavy_pistol": {
-		"name": "Heavy Pistol",
-		"short_name": "Heavy",
-		"size": Vector2i(2, 2),
-		"stackable": false,
-		"max_stack": 1,
-		"color": Color(0.42, 0.30, 0.22, 1.0),
-		"type": &"ranged_weapon",
-		"weapon_resource_path": "res://resources/weapons/heavy_pistol.tres",
-	},
-	&"field_knife": {
-		"name": "Field Knife",
-		"short_name": "Knife",
-		"size": Vector2i(1, 2),
-		"stackable": false,
-		"max_stack": 1,
-		"color": Color(0.36, 0.38, 0.34, 1.0),
-		"type": &"melee_weapon",
-		"weapon_resource_path": "res://resources/weapons/field_knife.tres",
-	},
-}
+const DEFAULT_ITEM_RESOURCE_DIRECTORY := "res://resources/items"
 
 @export var grid_width: int = 10
 @export var grid_height: int = 6
+@export_dir var item_resource_directory: String = DEFAULT_ITEM_RESOURCE_DIRECTORY
 @export var starting_items: Dictionary = {}
+
+static var _definition_cache_by_directory: Dictionary = {}
 
 var _items: Dictionary = {}
 var _entries: Dictionary = {}
@@ -227,13 +191,22 @@ func get_grid_size() -> Vector2i:
 
 
 func get_item_definition(item_id: StringName) -> Dictionary:
-	return ITEM_DEFINITIONS.get(item_id, {
-		"name": str(item_id),
-		"size": Vector2i.ONE,
-		"stackable": false,
-		"max_stack": 1,
-		"color": Color(0.44, 0.44, 0.46, 1.0),
-	})
+	return get_item_definition_from_directory(item_id, item_resource_directory)
+
+
+static func get_item_definition_from_directory(
+	item_id: StringName,
+	item_directory: String = DEFAULT_ITEM_RESOURCE_DIRECTORY
+) -> Dictionary:
+	var definitions := _get_item_definitions(item_directory)
+	if definitions.has(item_id):
+		return definitions[item_id]
+
+	return _get_fallback_item_definition(item_id)
+
+
+static func reload_item_definitions(item_directory: String = DEFAULT_ITEM_RESOURCE_DIRECTORY) -> void:
+	_definition_cache_by_directory.erase(item_directory)
 
 
 func get_entries() -> Array[Dictionary]:
@@ -289,6 +262,44 @@ func move_entry(entry_id: int, position: Vector2i) -> bool:
 	_entries[entry_id] = entry
 	grid_changed.emit()
 	return true
+
+
+static func _get_item_definitions(item_directory: String) -> Dictionary:
+	if _definition_cache_by_directory.has(item_directory):
+		return _definition_cache_by_directory[item_directory]
+
+	var definitions: Dictionary = {}
+	var directory := DirAccess.open(item_directory)
+	if directory == null:
+		_definition_cache_by_directory[item_directory] = definitions
+		return definitions
+
+	directory.list_dir_begin()
+	var file_name := directory.get_next()
+	while not file_name.is_empty():
+		if not directory.current_is_dir() and file_name.get_extension() == "tres":
+			var resource_path := item_directory.path_join(file_name)
+			var resource := ResourceLoader.load(resource_path)
+			if resource != null and resource.has_method("to_definition"):
+				var item_id := StringName(resource.get("item_id"))
+				if item_id != &"":
+					definitions[item_id] = resource.call("to_definition")
+		file_name = directory.get_next()
+
+	directory.list_dir_end()
+	_definition_cache_by_directory[item_directory] = definitions
+	return definitions
+
+
+static func _get_fallback_item_definition(item_id: StringName) -> Dictionary:
+	return {
+		"name": str(item_id),
+		"short_name": str(item_id),
+		"size": Vector2i.ONE,
+		"stackable": false,
+		"max_stack": 1,
+		"color": Color(0.44, 0.44, 0.46, 1.0),
+	}
 
 
 func _create_entry(item_id: StringName, position: Vector2i, size: Vector2i, quantity: int) -> void:

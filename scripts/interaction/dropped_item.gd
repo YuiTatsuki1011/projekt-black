@@ -3,6 +3,7 @@ class_name DroppedItem
 
 @export var item_id: StringName = &"pistol_ammo"
 @export var quantity: int = 1
+@export_dir var item_resource_directory: String = Inventory.DEFAULT_ITEM_RESOURCE_DIRECTORY
 
 @onready var label: Label = $Label
 @onready var body: Polygon2D = $Body
@@ -37,7 +38,7 @@ func _refresh_visual() -> void:
 
 
 func _get_display_name() -> String:
-	var definition: Dictionary = Inventory.ITEM_DEFINITIONS.get(item_id, {})
+	var definition: Dictionary = Inventory.get_item_definition_from_directory(item_id, item_resource_directory)
 	if not definition.is_empty():
 		return str(definition.get("short_name", definition.get("name", item_id)))
 
@@ -45,7 +46,7 @@ func _get_display_name() -> String:
 
 
 func _get_display_color() -> Color:
-	var definition: Dictionary = Inventory.ITEM_DEFINITIONS.get(item_id, {})
+	var definition: Dictionary = Inventory.get_item_definition_from_directory(item_id, item_resource_directory)
 	if definition.has("color"):
 		return definition.get("color")
 

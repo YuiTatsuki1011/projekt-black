@@ -80,6 +80,7 @@ res://
 - レアリティ
 
 現在は `resources/weapons/basic_pistol.tres` と `resources/weapons/field_knife.tres` を初期装備データとして使います。
+インベントリ上の名前、サイズ、色、スタック数は `resources/items/*.tres` の `InventoryItemData` Resourceで管理します。
 
 ## Autoload
 
@@ -143,7 +144,7 @@ res://
 
 `Inventory` は、アイテムID、所持数、グリッド上の配置を記録する部品です。
 現在はプレイヤーの `Inventory` ノードで10x6マスのグリッドを管理し、`pistol_ammo` を2x1マスのアイテムとして配置します。
-武器アイテムとして `basic_pistol`、`heavy_pistol`、`field_knife` も定義済みです。
+アイテム定義は `resources/items/` に置いた `.tres` を起動時に読み込みます。武器アイテムとして `basic_pistol`、`heavy_pistol`、`field_knife` も定義済みです。
 リロード時はグリッド上の `pistol_ammo` から弾薬を消費します。
 
 - `get_quantity(item_id)`: 指定アイテムの所持数を返す。
@@ -159,6 +160,8 @@ res://
 インベントリ枠外へドラッグして離したアイテムは `DroppedItem` としてマップへ生成され、Fキーで拾い直せます。
 武器アイテムは対応する装備枠へドラッグして装備します。装備枠が空の場合だけ右クリック即装備もできます。
 詳細パネルは固定ノードではなく、`InventoryScreen` が必要時に `Root` 直下へ作ります。比較がある武器では選択中カードと現装備カードを横並びにし、弾薬や素材など比較対象がないアイテムでは選択中カードだけを表示します。
+
+アイテムの追加・編集手順は `docs/ITEM_AUTHORING.md` に記録します。
 
 ## Enemy Melee Attacks
 

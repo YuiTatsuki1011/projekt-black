@@ -21,6 +21,7 @@ const DETAIL_TEXT_COLOR := Color(0.9, 0.92, 0.9, 1.0)
 const DETAIL_MUTED_COLOR := Color(0.62, 0.65, 0.68, 1.0)
 const DETAIL_BETTER_COLOR := Color(0.34, 0.92, 0.48, 1.0)
 const DETAIL_WORSE_COLOR := Color(0.95, 0.32, 0.28, 1.0)
+const DETAIL_EQUIPPED_COLOR := Color(0.42, 0.96, 0.56, 1.0)
 const DRAG_SOURCE_NONE := &""
 const DRAG_SOURCE_INVENTORY := &"inventory"
 const DRAG_SOURCE_EQUIPMENT := &"equipment"
@@ -732,6 +733,10 @@ func _load_weapon_resource_for_item(item_id: StringName) -> Resource:
 		return null
 
 	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var weapon_resource := definition.get("weapon_resource", null) as Resource
+	if weapon_resource != null:
+		return weapon_resource
+
 	var resource_path: String = str(definition.get("weapon_resource_path", ""))
 	if resource_path.is_empty():
 		return null
@@ -936,6 +941,8 @@ func _populate_item_detail_card(
 	var definition: Dictionary = _inventory.get_item_definition(item_id)
 	var item_type: StringName = _get_item_type(item_id)
 	_add_detail_title(_get_detail_display_name(definition, weapon))
+	if card_label == "Equipped" and weapon != null:
+		_add_equipped_badge()
 	_add_detail_note("%s  |  %s" % [card_label, _get_detail_type_line(definition, item_type)])
 	_add_detail_separator()
 
@@ -1071,6 +1078,16 @@ func _add_detail_note(text: String) -> void:
 	label.text = text
 	label.modulate = DETAIL_MUTED_COLOR
 	label.add_theme_font_size_override("font_size", 11)
+	label.clip_text = true
+	_detail_rows.add_child(label)
+
+
+func _add_equipped_badge() -> void:
+	var label := Label.new()
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.text = "【装備中】"
+	label.modulate = DETAIL_EQUIPPED_COLOR
+	label.add_theme_font_size_override("font_size", 12)
 	label.clip_text = true
 	_detail_rows.add_child(label)
 
