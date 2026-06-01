@@ -1,0 +1,18 @@
+[gd_resource type="Resource" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/combat/ranged_weapon_data.gd" id="1_ranged_weapon_data"]
+[ext_resource type="PackedScene" path="res://scenes/weapons/projectile.tscn" id="2_projectile"]
+
+[resource]
+script = ExtResource("1_ranged_weapon_data")
+weapon_id = &"heavy_pistol"
+display_name = "Heavy Pistol"
+damage = 18
+magazine_size = 4
+starting_reserve_ammo = 0
+ammo_item_id = &"pistol_ammo"
+reload_time = 1.45
+fire_cooldown = 0.36
+recoil_amount = 0.28
+recoil_recovery_speed = 6.0
+projectile_scene = ExtResource("2_projectile")

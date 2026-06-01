@@ -77,6 +77,12 @@ position = Vector2(340, 290)
 button_label = "AMMO +12"
 quantity = 12
 
+[node name="HeavyPistolButton" parent="." instance=ExtResource("9_item_grant_button")]
+position = Vector2(470, 290)
+item_id = &"heavy_pistol"
+button_label = "HEAVY PISTOL"
+quantity = 1
+
 [node name="Crosshair" parent="." instance=ExtResource("2_crosshair")]
 
 [node name="AmmoHud" parent="." instance=ExtResource("3_hud")]

@@ -38,9 +38,9 @@ mouse_filter = 2
 [node name="Panel" type="PanelContainer" parent="Root"]
 layout_mode = 0
 offset_left = 680.0
-offset_top = 230.0
+offset_top = 188.0
 offset_right = 1240.0
-offset_bottom = 610.0
+offset_bottom = 668.0
 mouse_filter = 0
 theme_override_styles/panel = SubResource("StyleBoxFlat_inventory_panel")
 
@@ -60,6 +60,12 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "INVENTORY"
 horizontal_alignment = 1
+
+[node name="EquipmentRoot" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
+custom_minimum_size = Vector2(498, 62)
+layout_mode = 2
+theme_override_constants/separation = 12
+alignment = 1
 
 [node name="GridRoot" type="Control" parent="Root/Panel/Margin/Rows"]
 custom_minimum_size = Vector2(498, 298)

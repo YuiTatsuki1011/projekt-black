@@ -13,6 +13,36 @@ const ITEM_DEFINITIONS: Dictionary = {
 		"max_stack": 60,
 		"color": Color(0.28, 0.56, 0.76, 1.0),
 	},
+	&"basic_pistol": {
+		"name": "Basic Pistol",
+		"short_name": "Pistol",
+		"size": Vector2i(2, 2),
+		"stackable": false,
+		"max_stack": 1,
+		"color": Color(0.30, 0.32, 0.36, 1.0),
+		"type": &"ranged_weapon",
+		"weapon_resource_path": "res://resources/weapons/basic_pistol.tres",
+	},
+	&"heavy_pistol": {
+		"name": "Heavy Pistol",
+		"short_name": "Heavy",
+		"size": Vector2i(2, 2),
+		"stackable": false,
+		"max_stack": 1,
+		"color": Color(0.42, 0.30, 0.22, 1.0),
+		"type": &"ranged_weapon",
+		"weapon_resource_path": "res://resources/weapons/heavy_pistol.tres",
+	},
+	&"field_knife": {
+		"name": "Field Knife",
+		"short_name": "Knife",
+		"size": Vector2i(1, 2),
+		"stackable": false,
+		"max_stack": 1,
+		"color": Color(0.36, 0.38, 0.34, 1.0),
+		"type": &"melee_weapon",
+		"weapon_resource_path": "res://resources/weapons/field_knife.tres",
+	},
 }
 
 @export var grid_width: int = 10

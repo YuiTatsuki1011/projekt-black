@@ -9,11 +9,14 @@ const CELL_BORDER_COLOR := Color(0.36, 0.38, 0.42, 1.0)
 const ITEM_BORDER_COLOR := Color(0.9, 0.92, 0.84, 1.0)
 const PLACEABLE_COLOR := Color(0.18, 0.82, 0.35, 0.42)
 const BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.5)
+const SLOT_COLOR := Color(0.12, 0.13, 0.15, 1.0)
+const SLOT_BORDER_COLOR := Color(0.42, 0.44, 0.48, 1.0)
 
 @export var player_path: NodePath = NodePath("../Player")
 @export var dropped_item_scene: PackedScene
 
 @onready var panel: Control = $Root/Panel
+@onready var equipment_root: HBoxContainer = $Root/Panel/Margin/Rows/EquipmentRoot
 @onready var grid_root: Control = $Root/Panel/Margin/Rows/GridRoot
 @onready var cells_root: Control = $Root/Panel/Margin/Rows/GridRoot/CellsRoot
 @onready var items_root: Control = $Root/Panel/Margin/Rows/GridRoot/ItemsRoot
@@ -21,6 +24,7 @@ const BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.5)
 
 var _player: Node2D
 var _inventory: Node
+var _equipment: Node
 var _item_nodes: Dictionary = {}
 var _drag_entry_id: int = -1
 var _drag_cell_offset: Vector2i = Vector2i.ZERO
@@ -36,12 +40,17 @@ func _ready() -> void:
 	if player != null:
 		_player = player as Node2D
 		_inventory = player.get_node_or_null("Inventory")
+		_equipment = player.get_node_or_null("Equipment")
 
 	if _inventory != null:
 		if _inventory.has_signal("grid_changed"):
 			_inventory.grid_changed.connect(_refresh)
 		_build_grid_cells()
 		_refresh()
+
+	if _equipment != null and _equipment.has_signal("equipment_changed"):
+		_equipment.connect("equipment_changed", Callable(self, "_refresh_equipment"))
+	_refresh_equipment()
 
 
 func _input(event: InputEvent) -> void:
@@ -97,6 +106,7 @@ func _refresh() -> void:
 	if _inventory == null:
 		return
 
+	_refresh_equipment()
 	_clear_children(items_root)
 	_item_nodes.clear()
 
@@ -159,6 +169,9 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 		var mouse_button := event as InputEventMouseButton
 		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
 			_begin_drag(entry_id)
+			get_viewport().set_input_as_handled()
+		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
+			_try_equip_entry(entry_id)
 			get_viewport().set_input_as_handled()
 
 
@@ -287,6 +300,125 @@ func _drop_dragged_entry_to_world() -> void:
 	if dropped_item is Node2D:
 		var dropped_item_2d := dropped_item as Node2D
 		dropped_item_2d.global_position = _player.global_position + Vector2(28, -10)
+
+
+func _try_equip_entry(entry_id: int) -> bool:
+	if _inventory == null or _equipment == null:
+		return false
+
+	var entry: Dictionary = _inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var item_type: StringName = definition.get("type", &"")
+	var resource_path: String = str(definition.get("weapon_resource_path", ""))
+	if resource_path.is_empty():
+		return false
+
+	var next_weapon := load(resource_path) as Resource
+	if next_weapon == null:
+		return false
+
+	var previous_item_id: StringName = _get_equipped_item_id(item_type)
+	if previous_item_id == item_id:
+		return false
+
+	var removed_entry: Dictionary = _inventory.remove_entry(entry_id)
+	if removed_entry.is_empty():
+		return false
+
+	var equipped := false
+	if item_type == &"ranged_weapon" and _equipment.has_method("equip_ranged_weapon"):
+		_equipment.call("equip_ranged_weapon", next_weapon)
+		equipped = true
+	elif item_type == &"melee_weapon" and _equipment.has_method("equip_melee_weapon"):
+		_equipment.call("equip_melee_weapon", next_weapon)
+		equipped = true
+
+	if not equipped:
+		_inventory.add_item(item_id, int(removed_entry.get("quantity", 1)))
+		return false
+
+	if previous_item_id != &"":
+		_inventory.add_item(previous_item_id, 1)
+
+	_refresh()
+	return true
+
+
+func _get_equipped_item_id(item_type: StringName) -> StringName:
+	if _equipment == null:
+		return &""
+
+	var equipped_weapon: Resource = null
+	if item_type == &"ranged_weapon" and _equipment.has_method("get_ranged_weapon"):
+		equipped_weapon = _equipment.call("get_ranged_weapon") as Resource
+	elif item_type == &"melee_weapon" and _equipment.has_method("get_melee_weapon"):
+		equipped_weapon = _equipment.call("get_melee_weapon") as Resource
+
+	if equipped_weapon == null:
+		return &""
+
+	return StringName(equipped_weapon.get("weapon_id"))
+
+
+func _refresh_equipment(_slot: StringName = &"") -> void:
+	if equipment_root == null:
+		return
+
+	_clear_children(equipment_root)
+	_add_equipment_slot("SIDEARM", _get_equipped_weapon_name(&"ranged_weapon"))
+	_add_equipment_slot("MELEE", _get_equipped_weapon_name(&"melee_weapon"))
+
+
+func _add_equipment_slot(slot_name: String, weapon_name: String) -> void:
+	var slot_panel := Panel.new()
+	slot_panel.custom_minimum_size = Vector2(243, 62)
+	slot_panel.add_theme_stylebox_override("panel", _make_flat_style(SLOT_COLOR, SLOT_BORDER_COLOR, 1))
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 10)
+	margin.add_theme_constant_override("margin_top", 7)
+	margin.add_theme_constant_override("margin_right", 10)
+	margin.add_theme_constant_override("margin_bottom", 7)
+	slot_panel.add_child(margin)
+
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 4)
+	margin.add_child(rows)
+
+	var title := Label.new()
+	title.text = slot_name
+	title.add_theme_font_size_override("font_size", 9)
+	title.modulate = Color(0.68, 0.70, 0.74, 1.0)
+	rows.add_child(title)
+
+	var value := Label.new()
+	value.text = weapon_name
+	value.add_theme_font_size_override("font_size", 13)
+	value.clip_text = true
+	rows.add_child(value)
+
+	equipment_root.add_child(slot_panel)
+
+
+func _get_equipped_weapon_name(item_type: StringName) -> String:
+	if _equipment == null:
+		return "Empty"
+
+	var weapon: Resource = null
+	if item_type == &"ranged_weapon" and _equipment.has_method("get_ranged_weapon"):
+		weapon = _equipment.call("get_ranged_weapon") as Resource
+	elif item_type == &"melee_weapon" and _equipment.has_method("get_melee_weapon"):
+		weapon = _equipment.call("get_melee_weapon") as Resource
+
+	if weapon == null:
+		return "Empty"
+
+	return str(weapon.get("display_name"))
 
 
 func _entry_pixel_size(entry_size: Vector2i) -> Vector2:
