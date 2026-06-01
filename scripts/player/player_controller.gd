@@ -15,6 +15,7 @@ signal interact_requested
 @export var fire_cooldown: float = 0.22
 @export var recoil_amount: float = 0.18
 @export var recoil_recovery_speed: float = 8.0
+@export var aim_flip_dead_zone: float = 12.0
 @export var projectile_scene: PackedScene
 
 @onready var body_root: Node2D = $VisualRoot/BodyRoot
@@ -51,10 +52,10 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	_update_timers(delta)
-	_update_aim(delta)
 	_handle_movement(delta)
-	_handle_actions()
 	move_and_slide()
+	_update_aim(delta)
+	_handle_actions()
 
 
 func _update_timers(delta: float) -> void:
@@ -101,8 +102,11 @@ func _handle_actions() -> void:
 
 func _update_aim(delta: float) -> void:
 	var mouse_position: Vector2 = get_global_mouse_position()
-	var next_facing: int = 1
-	if mouse_position.x < global_position.x:
+	var next_facing: int = _facing
+	var aim_offset_x: float = mouse_position.x - global_position.x
+	if aim_offset_x > aim_flip_dead_zone:
+		next_facing = 1
+	elif aim_offset_x < -aim_flip_dead_zone:
 		next_facing = -1
 
 	if next_facing != _facing:

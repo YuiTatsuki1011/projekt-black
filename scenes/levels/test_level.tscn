@@ -1,7 +1,8 @@
-[gd_scene load_steps=5 format=3]
+[gd_scene load_steps=6 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
+[ext_resource type="PackedScene" path="res://scenes/ui/ammo_hud.tscn" id="3_hud"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_floor"]
 size = Vector2(640, 24)
@@ -53,3 +54,5 @@ polygon = PackedVector2Array(-12, -130, 12, -130, 12, 130, -12, 130)
 position = Vector2(160, 280)
 
 [node name="Crosshair" parent="." instance=ExtResource("2_crosshair")]
+
+[node name="AmmoHud" parent="." instance=ExtResource("3_hud")]

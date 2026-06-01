@@ -98,5 +98,5 @@ auto_calculate_length_and_angle = false
 [node name="Camera2D" type="Camera2D" parent="."]
 position = Vector2(0, -22)
 enabled = true
-zoom = Vector2(2, 2)
-position_smoothing_enabled = true
+zoom = Vector2(3, 3)
+position_smoothing_enabled = false
