@@ -7,9 +7,12 @@ signal reload_started(duration: float)
 signal interact_requested
 signal died
 
+const ENEMY_COLLISION_MASK: int = 8
+
 @export var walk_speed: float = 160.0
 @export var crouch_speed_multiplier: float = 0.45
 @export var jump_velocity: float = -360.0
+@export var bullet_damage: int = 10
 @export var magazine_size: int = 6
 @export var starting_reserve_ammo: int = 24
 @export var reload_time: float = 1.2
@@ -148,7 +151,12 @@ func _try_fire() -> void:
 	if projectile_scene == null:
 		return
 
+	if _try_apply_close_barrel_hit():
+		_consume_round()
+		return
+
 	var projectile: Node = projectile_scene.instantiate()
+	projectile.set("damage", bullet_damage)
 	var projectile_parent: Node = get_tree().current_scene
 	if projectile_parent == null:
 		projectile_parent = get_parent()
@@ -165,11 +173,7 @@ func _try_fire() -> void:
 		if projectile_2d.has_method("launch"):
 			projectile_2d.call("launch", shot_direction)
 
-	current_ammo -= 1
-	_fire_cooldown_remaining = fire_cooldown
-	_recoil = recoil_amount
-	fired.emit(current_ammo)
-	ammo_changed.emit(current_ammo, reserve_ammo)
+	_consume_round()
 
 
 func _start_reload() -> void:
@@ -206,24 +210,59 @@ func _set_crouching(enabled: bool) -> void:
 
 
 func _update_arm_anchor() -> void:
-	var shoulder_height: float = -26.0
+	var shoulder_height: float = -24.0
 	if _is_crouching:
 		shoulder_height = -16.0
-	arm_rig.position = Vector2(7.0 * float(_facing), shoulder_height)
+	arm_rig.position = Vector2(1.0 * float(_facing), shoulder_height)
 
 
 func _configure_aim_bones() -> void:
 	upper_arm_bone.set_autocalculate_length_and_angle(false)
-	upper_arm_bone.set_length(14.0)
+	upper_arm_bone.set_length(8.0)
 	upper_arm_bone.set_bone_angle(0.0)
 
 	forearm_bone.set_autocalculate_length_and_angle(false)
-	forearm_bone.set_length(16.0)
+	forearm_bone.set_length(6.0)
 	forearm_bone.set_bone_angle(0.0)
 
 	hand_bone.set_autocalculate_length_and_angle(false)
-	hand_bone.set_length(30.0)
+	hand_bone.set_length(18.0)
 	hand_bone.set_bone_angle(0.0)
+
+
+func _consume_round() -> void:
+	current_ammo -= 1
+	_fire_cooldown_remaining = fire_cooldown
+	_recoil = recoil_amount
+	fired.emit(current_ammo)
+	ammo_changed.emit(current_ammo, reserve_ammo)
+
+
+func _try_apply_close_barrel_hit() -> bool:
+	var space_state: PhysicsDirectSpaceState2D = get_world_2d().direct_space_state
+	var query := PhysicsRayQueryParameters2D.create(
+		arm_rig.global_position,
+		muzzle.global_position,
+		ENEMY_COLLISION_MASK
+	)
+	query.exclude = [get_rid()]
+	query.collide_with_bodies = true
+	query.collide_with_areas = false
+
+	var result: Dictionary = space_state.intersect_ray(query)
+	if result.is_empty():
+		return false
+
+	var collider := result.get("collider") as Node
+	if collider == null:
+		return false
+
+	var health_node := collider.get_node_or_null("Health")
+	if health_node == null:
+		return false
+
+	health_node.apply_damage(bullet_damage)
+	return true
 
 
 func _interact_with_nearest() -> void:
