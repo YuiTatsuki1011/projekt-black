@@ -20,6 +20,7 @@ enum MeleeState {
 
 @export var walk_speed: float = 160.0
 @export var crouch_speed_multiplier: float = 0.45
+@export var sub_weapon_aim_speed_multiplier: float = 0.72
 @export var jump_velocity: float = -360.0
 @export var bullet_damage: int = 10
 @export var magazine_size: int = 6
@@ -105,6 +106,8 @@ var _afterimage_timer: float = 0.0
 var _suppress_inventory_ammo_signal: bool = false
 var _has_ranged_weapon: bool = true
 var _has_melee_weapon: bool = true
+var _is_sub_weapon_aiming: bool = false
+var _sub_weapon_fire_was_pressed: bool = false
 var _melee_combo_damages: PackedInt32Array = PackedInt32Array([34, 48, 68])
 
 
@@ -197,6 +200,8 @@ func _clear_ranged_weapon_stats() -> void:
 
 func _clear_melee_weapon_stats() -> void:
 	_has_melee_weapon = false
+	_is_sub_weapon_aiming = false
+	_sub_weapon_fire_was_pressed = false
 	_melee_combo_damages = PackedInt32Array()
 	melee_stamina_cost = 0.0
 	melee_min_stamina_to_use = INF
@@ -206,6 +211,7 @@ func _clear_melee_weapon_stats() -> void:
 	_melee_combo_step = 0
 	_current_melee_step = 0
 	_melee_hit_bodies.clear()
+	_set_sub_weapon_aim_visual(false)
 	_set_melee_visual(false)
 
 
@@ -302,6 +308,8 @@ func _handle_movement(delta: float) -> void:
 	var active_speed: float = walk_speed
 	if _is_crouching:
 		active_speed *= crouch_speed_multiplier
+	if _is_sub_weapon_aiming:
+		active_speed *= sub_weapon_aim_speed_multiplier
 
 	if _is_dodging:
 		velocity.x = float(_dodge_direction) * dodge_speed
@@ -327,7 +335,18 @@ func _handle_actions() -> void:
 	if Input.is_action_just_pressed("dodge"):
 		_try_start_dodge()
 
-	if Input.is_action_just_pressed("melee_attack"):
+	_update_sub_weapon_aiming()
+
+	var sub_weapon_modifier_pressed := (
+		Input.is_action_pressed("sub_weapon_aim")
+		and _has_melee_weapon
+		and not _is_dodging
+	)
+	var fire_pressed := Input.is_action_pressed("fire")
+	var sub_weapon_fire_just_pressed := fire_pressed and not _sub_weapon_fire_was_pressed
+	_sub_weapon_fire_was_pressed = fire_pressed
+
+	if sub_weapon_modifier_pressed and sub_weapon_fire_just_pressed:
 		_handle_melee_input()
 
 	if _is_dodging or _melee_state != MeleeState.READY:
@@ -340,7 +359,7 @@ func _handle_actions() -> void:
 	if Input.is_action_just_pressed("reload"):
 		_start_reload()
 
-	if Input.is_action_pressed("fire"):
+	if not sub_weapon_modifier_pressed and fire_pressed:
 		_try_fire()
 
 
@@ -463,10 +482,13 @@ func _try_start_dodge() -> void:
 
 	_dodge_direction = _get_action_direction()
 	_is_dodging = true
+	_is_sub_weapon_aiming = false
+	_sub_weapon_fire_was_pressed = false
 	_dodge_timer = dodge_duration
 	_dodge_cooldown_remaining = dodge_cooldown
 	_afterimage_timer = 0.0
 	_set_crouching(false)
+	_set_sub_weapon_aim_visual(false)
 	health.set_invulnerable_for(dodge_invulnerability_time)
 	body_root.modulate = Color(0.72, 0.78, 0.86, 1.0)
 	arm_rig.modulate = Color(0.72, 0.78, 0.86, 1.0)
@@ -514,6 +536,27 @@ func _handle_melee_input() -> void:
 		_queued_melee_attack = true
 
 
+func _update_sub_weapon_aiming() -> void:
+	var should_aim := (
+		Input.is_action_pressed("sub_weapon_aim")
+		and _has_melee_weapon
+		and not _is_dodging
+		and _melee_state == MeleeState.READY
+	)
+
+	if should_aim:
+		_melee_direction = _get_action_direction()
+		_set_facing(_melee_direction)
+
+	if _is_sub_weapon_aiming == should_aim:
+		if _is_sub_weapon_aiming:
+			_set_sub_weapon_aim_visual(true)
+		return
+
+	_is_sub_weapon_aiming = should_aim
+	_set_sub_weapon_aim_visual(_is_sub_weapon_aiming)
+
+
 func _try_start_melee_attack() -> void:
 	if not is_on_floor():
 		return
@@ -531,6 +574,8 @@ func _try_start_melee_attack() -> void:
 	_set_crouching(false)
 	_set_facing(_melee_direction)
 	_consume_stamina(melee_stamina_cost)
+	_is_sub_weapon_aiming = false
+	_set_sub_weapon_aim_visual(false)
 	_melee_state = MeleeState.LUNGE
 	_melee_timer = melee_lunge_time
 	_set_melee_visual(true)
@@ -591,6 +636,9 @@ func _cancel_melee_attack() -> void:
 
 
 func _melee_has_enemy_contact() -> bool:
+	if not melee_hit_area.monitoring:
+		return false
+
 	for body in melee_hit_area.get_overlapping_bodies():
 		if body.get_node_or_null("Health") != null:
 			return true
@@ -598,6 +646,9 @@ func _melee_has_enemy_contact() -> bool:
 
 
 func _apply_melee_damage() -> void:
+	if not melee_hit_area.monitoring:
+		return
+
 	var damage := _get_melee_damage()
 	var hit_position := melee_hit_area.global_position
 
@@ -656,6 +707,19 @@ func _set_melee_visual(visible: bool) -> void:
 	melee_hit_area.monitoring = visible
 	melee_root.scale.x = float(_melee_direction)
 	melee_slash_visual.visible = visible
+	if visible:
+		melee_slash_visual.color = Color(0.72, 0.62, 0.42, 0.45)
+
+
+func _set_sub_weapon_aim_visual(visible: bool) -> void:
+	if visible and _melee_state != MeleeState.READY:
+		return
+
+	melee_root.visible = visible
+	melee_hit_area.monitoring = false
+	melee_root.scale.x = float(_melee_direction)
+	melee_slash_visual.visible = visible
+	melee_slash_visual.color = Color(0.72, 0.72, 0.62, 0.28)
 
 
 func _set_ranged_visual(visible: bool) -> void:
@@ -790,8 +854,11 @@ func _on_interaction_area_exited(area: Area2D) -> void:
 
 func _on_died() -> void:
 	_is_dead = true
+	_is_sub_weapon_aiming = false
+	_sub_weapon_fire_was_pressed = false
 	velocity = Vector2.ZERO
 	body_root.modulate = Color(0.35, 0.35, 0.35, 1.0)
+	_set_sub_weapon_aim_visual(false)
 	arm_rig.visible = false
 	died.emit()
 

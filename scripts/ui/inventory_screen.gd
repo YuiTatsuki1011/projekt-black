@@ -594,7 +594,7 @@ func _refresh_equipment(_slot: StringName = &"") -> void:
 
 	_clear_children(equipment_root)
 	_equipment_slot_nodes.clear()
-	_add_equipment_slot(&"ranged", "SIDEARM")
+	_add_equipment_slot(&"ranged", "FIREARM")
 	_add_equipment_slot(&"melee", "MELEE")
 
 
@@ -1237,7 +1237,7 @@ func _get_detail_type_line(
 	var item_size: Vector2i = _resolve_display_size(definition, display_size)
 	var type_name := "Item"
 	if item_type == &"ranged_weapon":
-		type_name = "Sidearm"
+		type_name = "Firearm"
 	elif item_type == &"melee_weapon":
 		type_name = "Melee"
 	elif bool(definition.get("stackable", false)):
@@ -1255,7 +1255,7 @@ func _resolve_display_size(definition: Dictionary, display_size: Vector2i) -> Ve
 
 func _get_slot_display_name(slot: StringName) -> String:
 	if slot == &"ranged":
-		return "Sidearm"
+		return "Firearm"
 	if slot == &"melee":
 		return "Melee"
 
