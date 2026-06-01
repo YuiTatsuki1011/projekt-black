@@ -1,0 +1,102 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/player/player_controller.gd" id="1_player_controller"]
+[ext_resource type="PackedScene" path="res://scenes/weapons/projectile.tscn" id="2_projectile"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_standing"]
+size = Vector2(18, 42)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_crouching"]
+size = Vector2(20, 26)
+
+[node name="Player" type="CharacterBody2D"]
+collision_layer = 1
+collision_mask = 1
+script = ExtResource("1_player_controller")
+projectile_scene = ExtResource("2_projectile")
+
+[node name="StandingCollision" type="CollisionShape2D" parent="."]
+position = Vector2(0, -21)
+shape = SubResource("RectangleShape2D_standing")
+
+[node name="CrouchingCollision" type="CollisionShape2D" parent="."]
+position = Vector2(0, -13)
+shape = SubResource("RectangleShape2D_crouching")
+disabled = true
+
+[node name="VisualRoot" type="Node2D" parent="."]
+
+[node name="BodyRoot" type="Node2D" parent="VisualRoot"]
+
+[node name="Torso" type="Polygon2D" parent="VisualRoot/BodyRoot"]
+position = Vector2(0, -18)
+color = Color(0.2, 0.22, 0.26, 1)
+polygon = PackedVector2Array(-8, -16, 8, -16, 10, 16, -10, 16)
+
+[node name="Head" type="Polygon2D" parent="VisualRoot/BodyRoot"]
+position = Vector2(0, -42)
+color = Color(0.28, 0.3, 0.34, 1)
+polygon = PackedVector2Array(-6, -6, 6, -6, 7, 5, -7, 5)
+
+[node name="Legs" type="Polygon2D" parent="VisualRoot/BodyRoot"]
+position = Vector2(0, 1)
+color = Color(0.12, 0.13, 0.16, 1)
+polygon = PackedVector2Array(-8, 0, -2, 0, -2, 18, -8, 18, 2, 0, 8, 0, 8, 18, 2, 18)
+
+[node name="ArmRig" type="Node2D" parent="."]
+position = Vector2(7, -26)
+
+[node name="Skeleton2D" type="Skeleton2D" parent="ArmRig"]
+
+[node name="UpperArmBone" type="Bone2D" parent="ArmRig/Skeleton2D"]
+rest = Transform2D(1, 0, 0, 1, 0, 0)
+auto_calculate_length_and_angle = false
+
+[node name="UpperArmVisual" type="Polygon2D" parent="ArmRig/Skeleton2D/UpperArmBone"]
+color = Color(0.23, 0.25, 0.29, 1)
+polygon = PackedVector2Array(0, -3, 14, -3, 14, 3, 0, 3)
+
+[node name="ForearmBone" type="Bone2D" parent="ArmRig/Skeleton2D/UpperArmBone"]
+position = Vector2(14, 0)
+rest = Transform2D(1, 0, 0, 1, 14, 0)
+auto_calculate_length_and_angle = false
+
+[node name="ForearmVisual" type="Polygon2D" parent="ArmRig/Skeleton2D/UpperArmBone/ForearmBone"]
+color = Color(0.28, 0.3, 0.34, 1)
+polygon = PackedVector2Array(0, -3, 16, -3, 16, 3, 0, 3)
+
+[node name="HandBone" type="Bone2D" parent="ArmRig/Skeleton2D/UpperArmBone/ForearmBone"]
+position = Vector2(16, 0)
+rest = Transform2D(1, 0, 0, 1, 16, 0)
+auto_calculate_length_and_angle = false
+
+[node name="HandVisual" type="Polygon2D" parent="ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone"]
+position = Vector2(2, 0)
+color = Color(0.55, 0.47, 0.4, 1)
+polygon = PackedVector2Array(-2, -4, 5, -4, 5, 4, -2, 4)
+
+[node name="GunRoot" type="Node2D" parent="ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone"]
+position = Vector2(4, 0)
+
+[node name="GunBody" type="Polygon2D" parent="ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone/GunRoot"]
+color = Color(0.06, 0.06, 0.07, 1)
+polygon = PackedVector2Array(0, -4, 22, -4, 24, -2, 24, 3, 0, 3)
+
+[node name="GunGrip" type="Polygon2D" parent="ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone/GunRoot"]
+position = Vector2(7, 3)
+color = Color(0.04, 0.04, 0.045, 1)
+polygon = PackedVector2Array(0, 0, 6, 0, 4, 9, -1, 9)
+
+[node name="Muzzle" type="Marker2D" parent="ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone/GunRoot"]
+position = Vector2(26, 0)
+
+[node name="TipBone" type="Bone2D" parent="ArmRig/Skeleton2D/UpperArmBone/ForearmBone/HandBone"]
+position = Vector2(30, 0)
+rest = Transform2D(1, 0, 0, 1, 30, 0)
+auto_calculate_length_and_angle = false
+
+[node name="Camera2D" type="Camera2D" parent="."]
+position = Vector2(0, -22)
+enabled = true
+zoom = Vector2(2, 2)
+position_smoothing_enabled = true

@@ -17,8 +17,10 @@ res://
     levels/
     ui/
   scripts/
+    player/
     core/
     combat/
+    ui/
     inventory/
     interaction/
     generation/
@@ -51,7 +53,9 @@ res://
 `Script` はシーンに動きを与えるコードです。
 
 - `scripts/core/`: 共通処理。
+- `scripts/player/`: プレイヤーの移動、照準、入力処理。
 - `scripts/combat/`: ダメージ、弾、武器、命中処理。
+- `scripts/ui/`: 照準、HUD、メニューなどの表示処理。
 - `scripts/inventory/`: アイテム所持、装備。
 - `scripts/interaction/`: ドア、アイテム取得、会話など。
 - `scripts/generation/`: ランダムマップ生成。
