@@ -20,6 +20,7 @@ const DRAG_SOURCE_EQUIPMENT := &"equipment"
 @export var player_path: NodePath = NodePath("../Player")
 @export var dropped_item_scene: PackedScene
 
+@onready var root: Control = $Root
 @onready var panel: Control = $Root/Panel
 @onready var equipment_root: HBoxContainer = $Root/Panel/Margin/Rows/EquipmentRoot
 @onready var grid_root: Control = $Root/Panel/Margin/Rows/GridRoot
@@ -377,7 +378,7 @@ func _update_slot_preview() -> void:
 	_slot_preview.global_position = slot_node.global_position
 	_slot_preview.size = slot_node.size
 	_slot_preview.z_index = 12
-	panel.add_child(_slot_preview)
+	root.add_child(_slot_preview)
 
 
 func _clear_slot_preview() -> void:
@@ -612,7 +613,7 @@ func _begin_equipment_drag(slot: StringName) -> void:
 
 	_equipment_drag_node = _create_item_panel(definition, 1, item_size, true)
 	_equipment_drag_node.z_index = 30
-	panel.add_child(_equipment_drag_node)
+	root.add_child(_equipment_drag_node)
 
 	_refresh_equipment()
 	_update_drag_visual()
