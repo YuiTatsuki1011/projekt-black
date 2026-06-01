@@ -14,6 +14,7 @@ const SLOT_BORDER_COLOR := Color(0.42, 0.44, 0.48, 1.0)
 const SLOT_PLACEABLE_COLOR := Color(0.18, 0.82, 0.35, 0.32)
 const SLOT_BLOCKED_COLOR := Color(0.95, 0.12, 0.1, 0.34)
 const DETAIL_PANEL_SIZE := Vector2(306, 318)
+const DETAIL_PANEL_GAP := 12.0
 const DETAIL_PANEL_COLOR := Color(0.09, 0.095, 0.108, 0.98)
 const DETAIL_PANEL_BORDER_COLOR := Color(0.42, 0.44, 0.48, 1.0)
 const DETAIL_TEXT_COLOR := Color(0.9, 0.92, 0.9, 1.0)
@@ -51,7 +52,11 @@ var _equipment_drag_node: Control
 var _placement_markers: Array[ColorRect] = []
 var _slot_preview: ColorRect
 var _warning_tween: Tween
-var _detail_panel: Panel
+var _detail_panel: Control
+var _selected_detail_panel: Panel
+var _equipped_detail_panel: Panel
+var _selected_detail_rows: VBoxContainer
+var _equipped_detail_rows: VBoxContainer
 var _detail_rows: VBoxContainer
 var _hover_entry_id: int = -1
 var _hover_equipment_slot: StringName = &""
@@ -793,29 +798,22 @@ func _show_item_details(item_id: StringName, quantity: int, compare_to_equipped:
 	var item_type: StringName = _get_item_type(item_id)
 	var weapon: Resource = _load_weapon_resource_for_item(item_id)
 	var compare_weapon: Resource = null
+	var compare_slot: StringName = _slot_for_item_type(item_type)
 	if compare_to_equipped:
-		var compare_slot: StringName = _slot_for_item_type(item_type)
 		if compare_slot != &"":
 			compare_weapon = _get_equipped_weapon_for_slot(compare_slot)
 
 	_ensure_detail_panel()
-	_clear_children(_detail_rows)
+	_populate_item_detail_card(_selected_detail_rows, "Selected", item_id, quantity, weapon, compare_weapon)
 
-	_add_detail_title(_get_detail_display_name(definition, weapon))
-	_add_detail_note(_get_detail_type_line(definition, item_type))
-	if compare_weapon != null:
-		_add_detail_note("VS " + str(compare_weapon.get("display_name")))
-	_add_detail_separator()
-
-	if quantity > 1:
-		_add_detail_stat_row("Quantity", str(quantity))
-
-	if weapon != null and item_type == &"ranged_weapon":
-		_populate_ranged_weapon_details(weapon, compare_weapon)
-	elif weapon != null and item_type == &"melee_weapon":
-		_populate_melee_weapon_details(weapon, compare_weapon)
-	else:
-		_populate_generic_item_details(definition, quantity)
+	var should_show_equipped := compare_to_equipped and weapon != null and compare_slot != &""
+	_set_equipped_detail_visible(should_show_equipped)
+	if should_show_equipped:
+		if compare_weapon != null:
+			var equipped_item_id := StringName(compare_weapon.get("weapon_id"))
+			_populate_item_detail_card(_equipped_detail_rows, "Equipped", equipped_item_id, 1, compare_weapon, weapon)
+		else:
+			_populate_empty_detail_card(_equipped_detail_rows, "Equipped", compare_slot)
 
 	_detail_panel.visible = true
 	_position_detail_panel()
@@ -823,12 +821,8 @@ func _show_item_details(item_id: StringName, quantity: int, compare_to_equipped:
 
 func _show_empty_slot_details(slot: StringName) -> void:
 	_ensure_detail_panel()
-	_clear_children(_detail_rows)
-
-	_add_detail_title("Empty " + _get_slot_display_name(slot))
-	_add_detail_note("Equipment Slot")
-	_add_detail_separator()
-	_add_detail_stat_row("Slot", _get_slot_display_name(slot))
+	_set_equipped_detail_visible(false)
+	_populate_empty_detail_card(_selected_detail_rows, "Equipped", slot)
 
 	_detail_panel.visible = true
 	_position_detail_panel()
@@ -845,19 +839,37 @@ func _ensure_detail_panel() -> void:
 	if is_instance_valid(_detail_panel):
 		return
 
-	_detail_panel = Panel.new()
-	_detail_panel.name = "ItemDetailPanel"
+	_detail_panel = Control.new()
+	_detail_panel.name = "ItemDetailRoot"
 	_detail_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_detail_panel.size = DETAIL_PANEL_SIZE
 	_detail_panel.custom_minimum_size = DETAIL_PANEL_SIZE
 	_detail_panel.z_index = 45
 	_detail_panel.visible = false
-	_detail_panel.add_theme_stylebox_override("panel", _make_flat_style(
+	root.add_child(_detail_panel)
+
+	_selected_detail_rows = _create_detail_card("SelectedDetailPanel", Vector2.ZERO)
+	_equipped_detail_rows = _create_detail_card(
+		"EquippedDetailPanel",
+		Vector2(DETAIL_PANEL_SIZE.x + DETAIL_PANEL_GAP, 0.0)
+	)
+	_detail_rows = _selected_detail_rows
+	_set_equipped_detail_visible(false)
+
+
+func _create_detail_card(card_name: String, card_position: Vector2) -> VBoxContainer:
+	var card := Panel.new()
+	card.name = card_name
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.position = card_position
+	card.size = DETAIL_PANEL_SIZE
+	card.custom_minimum_size = DETAIL_PANEL_SIZE
+	card.add_theme_stylebox_override("panel", _make_flat_style(
 		DETAIL_PANEL_COLOR,
 		DETAIL_PANEL_BORDER_COLOR,
 		2
 	))
-	root.add_child(_detail_panel)
+	_detail_panel.add_child(card)
 
 	var margin := MarginContainer.new()
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -866,12 +878,29 @@ func _ensure_detail_panel() -> void:
 	margin.add_theme_constant_override("margin_top", 12)
 	margin.add_theme_constant_override("margin_right", 14)
 	margin.add_theme_constant_override("margin_bottom", 12)
-	_detail_panel.add_child(margin)
+	card.add_child(margin)
 
-	_detail_rows = VBoxContainer.new()
-	_detail_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_detail_rows.add_theme_constant_override("separation", 6)
-	margin.add_child(_detail_rows)
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rows.add_theme_constant_override("separation", 6)
+	margin.add_child(rows)
+	if card_name == "SelectedDetailPanel":
+		_selected_detail_panel = card
+	elif card_name == "EquippedDetailPanel":
+		_equipped_detail_panel = card
+
+	return rows
+
+
+func _set_equipped_detail_visible(is_visible: bool) -> void:
+	if is_instance_valid(_equipped_detail_panel):
+		_equipped_detail_panel.visible = is_visible
+
+	var width := DETAIL_PANEL_SIZE.x
+	if is_visible:
+		width = DETAIL_PANEL_SIZE.x * 2.0 + DETAIL_PANEL_GAP
+	_detail_panel.size = Vector2(width, DETAIL_PANEL_SIZE.y)
+	_detail_panel.custom_minimum_size = _detail_panel.size
 
 
 func _position_detail_panel() -> void:
@@ -880,15 +909,60 @@ func _position_detail_panel() -> void:
 
 	var margin := 16.0
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var detail_size: Vector2 = _detail_panel.size
 	var target_x: float = panel.global_position.x + panel.size.x + margin
-	if target_x + DETAIL_PANEL_SIZE.x > viewport_size.x - margin:
-		target_x = panel.global_position.x - DETAIL_PANEL_SIZE.x - margin
+	if target_x + detail_size.x > viewport_size.x - margin:
+		target_x = panel.global_position.x - detail_size.x - margin
 
 	var target_y: float = panel.global_position.y
 	_detail_panel.global_position = Vector2(
-		clampf(target_x, margin, viewport_size.x - DETAIL_PANEL_SIZE.x - margin),
-		clampf(target_y, margin, viewport_size.y - DETAIL_PANEL_SIZE.y - margin)
+		clampf(target_x, margin, viewport_size.x - detail_size.x - margin),
+		clampf(target_y, margin, viewport_size.y - detail_size.y - margin)
 	)
+
+
+func _populate_item_detail_card(
+	target_rows: VBoxContainer,
+	card_label: String,
+	item_id: StringName,
+	quantity: int,
+	weapon: Resource,
+	compare_weapon: Resource
+) -> void:
+	var previous_rows := _detail_rows
+	_detail_rows = target_rows
+	_clear_children(_detail_rows)
+
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var item_type: StringName = _get_item_type(item_id)
+	_add_detail_title(_get_detail_display_name(definition, weapon))
+	_add_detail_note("%s  |  %s" % [card_label, _get_detail_type_line(definition, item_type)])
+	_add_detail_separator()
+
+	if quantity > 1:
+		_add_detail_stat_row("Quantity", str(quantity))
+
+	if weapon != null and item_type == &"ranged_weapon":
+		_populate_ranged_weapon_details(weapon, compare_weapon)
+	elif weapon != null and item_type == &"melee_weapon":
+		_populate_melee_weapon_details(weapon, compare_weapon)
+	else:
+		_populate_generic_item_details(definition, quantity)
+
+	_detail_rows = previous_rows
+
+
+func _populate_empty_detail_card(target_rows: VBoxContainer, card_label: String, slot: StringName) -> void:
+	var previous_rows := _detail_rows
+	_detail_rows = target_rows
+	_clear_children(_detail_rows)
+
+	_add_detail_title("Empty " + _get_slot_display_name(slot))
+	_add_detail_note("%s  |  Equipment Slot" % card_label)
+	_add_detail_separator()
+	_add_detail_stat_row("Slot", _get_slot_display_name(slot))
+
+	_detail_rows = previous_rows
 
 
 func _populate_ranged_weapon_details(weapon: Resource, compare_weapon: Resource) -> void:
