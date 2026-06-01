@@ -123,13 +123,17 @@ res://
 
 ## Inventory
 
-`Inventory` は、アイテムIDと所持数を記録する小さな部品です。
-現在はプレイヤーの `Inventory` ノードで `pistol_ammo` を管理し、リロード時にそこから弾薬を消費します。
+`Inventory` は、アイテムID、所持数、グリッド上の配置を記録する部品です。
+現在はプレイヤーの `Inventory` ノードで10x6マスのグリッドを管理し、`pistol_ammo` を配置します。
+リロード時はグリッド上の `pistol_ammo` から弾薬を消費します。
 
 - `get_quantity(item_id)`: 指定アイテムの所持数を返す。
 - `add_item(item_id, quantity)`: アイテムを増やす。
 - `remove_item(item_id, quantity)`: 持っている分だけ減らし、実際に減らせた数を返す。
+- `move_entry(entry_id, position)`: グリッド上のアイテムを移動する。
+- `can_place(entry_id, position)`: 指定位置に置けるかを確認する。
 
+`InventoryScreen` はTabキーで開くUIです。グリッドの描画とドラッグ移動を担当し、実際の配置判定は `Inventory` に任せます。
 今は弾薬だけに使っていますが、同じ入口を回復アイテム、素材、クエスト品へ広げられます。
 
 ## Enemy Melee Attacks

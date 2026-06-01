@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=13 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
@@ -9,6 +9,7 @@
 [ext_resource type="PackedScene" path="res://scenes/ui/death_screen.tscn" id="7_death_screen"]
 [ext_resource type="PackedScene" path="res://scenes/ui/stamina_hud.tscn" id="8_stamina_hud"]
 [ext_resource type="PackedScene" path="res://scenes/interaction/item_grant_button.tscn" id="9_item_grant_button"]
+[ext_resource type="PackedScene" path="res://scenes/ui/inventory_screen.tscn" id="10_inventory_screen"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_floor"]
 size = Vector2(1200, 24)
@@ -81,5 +82,7 @@ quantity = 12
 [node name="AmmoHud" parent="." instance=ExtResource("3_hud")]
 
 [node name="StaminaHud" parent="." instance=ExtResource("8_stamina_hud")]
+
+[node name="InventoryScreen" parent="." instance=ExtResource("10_inventory_screen")]
 
 [node name="DeathScreen" parent="." instance=ExtResource("7_death_screen")]
