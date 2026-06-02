@@ -128,6 +128,8 @@ var _weapon_inspect_slot_nodes: Dictionary = {}
 var _weapon_inspect_item_id: StringName = &""
 var _weapon_inspect_weapon: Resource
 var _weapon_inspect_equipment_slot: StringName = &""
+var _weapon_inspect_dragging: bool = false
+var _weapon_inspect_drag_offset: Vector2 = Vector2.ZERO
 
 
 func _ready() -> void:
@@ -367,10 +369,24 @@ func _input(event: InputEvent) -> void:
 
 	if event is InputEventMouseButton:
 		var mouse_button := event as InputEventMouseButton
-		if mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
+		if mouse_button.pressed and (
+			mouse_button.button_index == MOUSE_BUTTON_RIGHT
+			or mouse_button.button_index == MOUSE_BUTTON_LEFT
+		):
 			if _is_context_popup_visible() and not _is_mouse_inside_context_popup():
 				_hide_context_menu()
 				_hide_split_dialog()
+
+	if _weapon_inspect_dragging:
+		if event is InputEventMouseMotion:
+			_move_weapon_inspect_window_to_mouse()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton:
+			var mouse_button := event as InputEventMouseButton
+			if mouse_button.button_index == MOUSE_BUTTON_LEFT and not mouse_button.pressed:
+				_weapon_inspect_dragging = false
+				get_viewport().set_input_as_handled()
+		return
 
 	if _is_dragging():
 		if event.is_action_pressed("reload"):
@@ -2006,6 +2022,7 @@ func _create_weapon_inspect_header(item_id: StringName, weapon: Resource, equipm
 	header.mouse_filter = Control.MOUSE_FILTER_STOP
 	header.custom_minimum_size = Vector2(0, 30)
 	header.add_theme_constant_override("separation", 8)
+	header.gui_input.connect(_on_weapon_inspect_header_gui_input)
 
 	var title := Label.new()
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2219,8 +2236,12 @@ func _get_ranged_weapon_part_slots(weapon: Resource, equipment_slot: StringName)
 	var magazine_definition: Dictionary = _inventory.get_item_definition(magazine_id) if _inventory != null and magazine_id != &"" else {}
 	var magazine_name := str(magazine_definition.get("short_name", magazine_definition.get("name", magazine_id)))
 	var magazine_line := magazine_name
+	var magazine_item_id := &""
+	var magazine_metadata := {}
 	if _is_active_firearm_slot(equipment_slot) and _player != null:
 		if bool(_player.call("has_active_magazine_inserted")):
+			magazine_item_id = magazine_id
+			magazine_metadata = _player.call("get_active_magazine_metadata")
 			magazine_line = "%s\n%d/%d" % [
 				magazine_name,
 				int(_player.get("magazine_ammo")),
@@ -2230,9 +2251,11 @@ func _get_ranged_weapon_part_slots(weapon: Resource, equipment_slot: StringName)
 			magazine_line = "Empty"
 
 	var chamber_line := "Round"
+	var chamber_item_id := &""
 	if _is_active_firearm_slot(equipment_slot) and _player != null:
 		var chamber_count := int(_player.get("chamber_ammo"))
 		if chamber_count > 0:
+			chamber_item_id = StringName(_player.get("ammo_item_id"))
 			chamber_line = "%d/%d" % [
 				chamber_count,
 				int(_player.get("chamber_size")),
@@ -2241,8 +2264,22 @@ func _get_ranged_weapon_part_slots(weapon: Resource, equipment_slot: StringName)
 			chamber_line = "Empty"
 
 	return [
-		{"slot_id": WEAPON_PART_MAGAZINE, "name": "MAGAZINE", "value": magazine_line, "locked": false},
-		{"slot_id": WEAPON_PART_CHAMBER, "name": "CHAMBER", "value": chamber_line, "locked": true},
+		{
+			"slot_id": WEAPON_PART_MAGAZINE,
+			"name": "MAGAZINE",
+			"value": magazine_line,
+			"item_id": magazine_item_id,
+			"metadata": magazine_metadata,
+			"locked": false,
+		},
+		{
+			"slot_id": WEAPON_PART_CHAMBER,
+			"name": "CHAMBER",
+			"value": chamber_line,
+			"item_id": chamber_item_id,
+			"quantity": 1,
+			"locked": true,
+		},
 		{"slot_id": &"optic", "name": "OPTIC", "value": "Empty", "locked": false},
 		{"slot_id": &"muzzle", "name": "MUZZLE", "value": "Empty", "locked": false},
 		{"slot_id": &"grip", "name": "GRIP", "value": "Empty", "locked": false},
@@ -2266,37 +2303,88 @@ func _create_weapon_part_slot_card(slot_data: Dictionary) -> Control:
 	var card := Panel.new()
 	card.mouse_filter = Control.MOUSE_FILTER_STOP
 	card.custom_minimum_size = Vector2(124, 58)
+	card.clip_contents = true
 	card.add_theme_stylebox_override("panel", _make_flat_style(
 		WEAPON_INSPECT_SLOT_COLOR,
 		DETAIL_PANEL_BORDER_COLOR if not bool(slot_data.get("locked", false)) else Color(0.24, 0.25, 0.28, 1.0),
 		1
 	))
 
-	var margin := _create_margin_container(8, 6, 8, 6)
-	card.add_child(margin)
-	var rows := VBoxContainer.new()
-	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rows.add_theme_constant_override("separation", 3)
-	margin.add_child(rows)
-
 	var name := Label.new()
 	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name.position = Vector2(8, 6)
+	name.size = Vector2(108, 12)
 	name.text = str(slot_data.get("name", "SLOT"))
 	name.modulate = DETAIL_MUTED_COLOR
 	name.add_theme_font_size_override("font_size", 9)
 	name.clip_text = true
-	rows.add_child(name)
+	card.add_child(name)
 
-	var value := Label.new()
-	value.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	value.text = str(slot_data.get("value", "Empty"))
-	value.modulate = DETAIL_TEXT_COLOR if not bool(slot_data.get("locked", false)) else DETAIL_MUTED_COLOR
-	value.add_theme_font_size_override("font_size", 10)
-	value.clip_text = true
-	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	rows.add_child(value)
+	var item_id := StringName(slot_data.get("item_id", &""))
+	if item_id != &"" and _inventory != null:
+		var definition: Dictionary = _inventory.get_item_definition(item_id)
+		var item_chip := Panel.new()
+		item_chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item_chip.position = Vector2(8, 22)
+		item_chip.size = Vector2(108, 28)
+		item_chip.add_theme_stylebox_override("panel", _make_flat_style(
+			definition.get("color", Color(0.44, 0.44, 0.46, 1.0)),
+			ITEM_BORDER_COLOR,
+			1
+		))
+		card.add_child(item_chip)
+
+		var item_label := Label.new()
+		item_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		item_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+		item_label.offset_left = 3.0
+		item_label.offset_right = -3.0
+		item_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		item_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		item_label.text = _get_weapon_part_item_label(slot_data, definition)
+		item_label.add_theme_font_size_override("font_size", 9)
+		item_label.clip_text = true
+		item_chip.add_child(item_label)
+	else:
+		var value := Label.new()
+		value.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		value.position = Vector2(8, 27)
+		value.size = Vector2(108, 18)
+		value.text = str(slot_data.get("value", "Empty"))
+		value.modulate = DETAIL_TEXT_COLOR if not bool(slot_data.get("locked", false)) else DETAIL_MUTED_COLOR
+		value.add_theme_font_size_override("font_size", 10)
+		value.clip_text = true
+		card.add_child(value)
 
 	return card
+
+
+func _get_weapon_part_item_label(slot_data: Dictionary, definition: Dictionary) -> String:
+	var slot_id := StringName(slot_data.get("slot_id", &""))
+	var value := str(slot_data.get("value", ""))
+	if slot_id == WEAPON_PART_MAGAZINE:
+		var short_name := str(definition.get("short_name", definition.get("name", slot_data.get("item_id", ""))))
+		var lines := value.split("\n")
+		if lines.size() >= 2:
+			return "%s %s" % [short_name, lines[1]]
+		return short_name
+
+	if slot_id == WEAPON_PART_CHAMBER:
+		return "Round %s" % value
+
+	return str(definition.get("short_name", definition.get("name", slot_data.get("item_id", ""))))
+
+
+func _on_weapon_inspect_header_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mouse_button := event as InputEventMouseButton
+		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
+			if not is_instance_valid(_weapon_inspect_window):
+				return
+
+			_weapon_inspect_dragging = true
+			_weapon_inspect_drag_offset = get_viewport().get_mouse_position() - _weapon_inspect_window.global_position
+			get_viewport().set_input_as_handled()
 
 
 func _on_weapon_part_slot_gui_input(event: InputEvent, slot_id: StringName) -> void:
@@ -2574,7 +2662,10 @@ func _refresh_weapon_inspect_window() -> void:
 	if not is_instance_valid(_weapon_inspect_window) or _weapon_inspect_weapon == null or _weapon_inspect_item_id == &"":
 		return
 
+	var previous_position := _weapon_inspect_window.global_position
 	_show_weapon_inspect_window(_weapon_inspect_item_id, _weapon_inspect_weapon, _weapon_inspect_equipment_slot)
+	if is_instance_valid(_weapon_inspect_window):
+		_set_weapon_inspect_window_position(_weapon_inspect_window, previous_position)
 
 
 func _get_weapon_total_capacity(weapon: Resource) -> int:
@@ -2589,14 +2680,43 @@ func _hide_weapon_inspect_window() -> void:
 	_weapon_inspect_item_id = &""
 	_weapon_inspect_weapon = null
 	_weapon_inspect_equipment_slot = &""
+	_weapon_inspect_dragging = false
+	_weapon_inspect_drag_offset = Vector2.ZERO
 
 
 func _position_weapon_inspect_window(window: Control) -> void:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
 	var margin := 24.0
-	window.global_position = Vector2(
+	_set_weapon_inspect_window_position(window, Vector2(
 		clampf((viewport_size.x - window.size.x) * 0.5, margin, viewport_size.x - window.size.x - margin),
 		clampf((viewport_size.y - window.size.y) * 0.5, margin, viewport_size.y - window.size.y - margin)
+	))
+
+
+func _move_weapon_inspect_window_to_mouse() -> void:
+	if not is_instance_valid(_weapon_inspect_window):
+		_weapon_inspect_dragging = false
+		return
+
+	_set_weapon_inspect_window_position(
+		_weapon_inspect_window,
+		get_viewport().get_mouse_position() - _weapon_inspect_drag_offset
+	)
+
+
+func _set_weapon_inspect_window_position(window: Control, target_position: Vector2) -> void:
+	if window == null:
+		return
+
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var margin := 8.0
+	var window_size := window.size
+	if window_size.x <= 0.0 or window_size.y <= 0.0:
+		window_size = WEAPON_INSPECT_SIZE
+
+	window.global_position = Vector2(
+		clampf(target_position.x, margin, maxf(margin, viewport_size.x - window_size.x - margin)),
+		clampf(target_position.y, margin, maxf(margin, viewport_size.y - window_size.y - margin))
 	)
 
 
