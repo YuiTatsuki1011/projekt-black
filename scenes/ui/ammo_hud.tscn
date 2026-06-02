@@ -15,6 +15,7 @@ grow_vertical = 2
 mouse_filter = 2
 
 [node name="Panel" type="PanelContainer" parent="Root"]
+visible = false
 layout_mode = 0
 offset_left = 32.0
 offset_top = 32.0
@@ -33,14 +34,16 @@ theme_override_constants/margin_bottom = 14
 layout_mode = 2
 
 [node name="AmmoValue" type="Label" parent="Root/Panel/Margin/Rows"]
+visible = false
 layout_mode = 2
 theme_override_font_sizes/font_size = 30
-text = "AMMO -- / --"
+text = ""
 
 [node name="StatusValue" type="Label" parent="Root/Panel/Margin/Rows"]
+visible = false
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
-text = "READY"
+text = ""
 
 [node name="MagazineRow" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
 layout_mode = 2

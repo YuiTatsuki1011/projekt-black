@@ -3,6 +3,14 @@ class_name AmmoHud
 
 const MAGAZINE_LOAD_INDICATOR_SCRIPT := preload("res://scripts/ui/magazine_load_indicator.gd")
 
+const MAGAZINE_SLOT_SIZE := Vector2(88.0, 132.0)
+const MAGAZINE_ICON_SIZE := Vector2(66.0, 104.0)
+const MAGAZINE_PANEL_PADDING := Vector2(14.0, 12.0)
+const MAGAZINE_DETAIL_HEIGHT := 78.0
+const MAGAZINE_ROW_SEPARATION := 10.0
+const ACTIVE_BORDER_WIDTH := 5
+const CURSOR_INDICATOR_SIZE := Vector2(96.0, 96.0)
+
 @export var player_path: NodePath = NodePath("../Player")
 @export var loaded_detail_visible_time: float = 5.0
 @export var loaded_detail_fade_time: float = 0.75
@@ -15,30 +23,29 @@ const MAGAZINE_LOAD_INDICATOR_SCRIPT := preload("res://scripts/ui/magazine_load_
 @onready var root: Control = $Root
 
 var _player: PlayerController
-var _reload_remaining: float = 0.0
-var _status_timer_label: String = "RELOAD"
 var _field_loading_active: bool = false
-var _check_remaining: float = 0.0
-var _check_duration: float = 0.0
-var _check_indicator: Control
-var _magazine_panel: PanelContainer
+var _magazine_panel: Panel
 var _loaded_detail_label: Label
+var _cursor_operation_indicator: Control
 var _last_magazines: Array = []
+var _active_magazine_frames: Array[Control] = []
 var _loaded_detail_hold_remaining: float = 0.0
 var _loaded_detail_fade_remaining: float = 0.0
+var _cursor_operation_remaining: float = 0.0
+var _cursor_operation_duration: float = 0.0
+var _active_border_blink_time: float = 0.0
 
 
 func _ready() -> void:
-	_setup_status_panel()
+	_hide_status_panel()
 	_setup_magazine_panel()
+	_create_cursor_operation_indicator()
 
 	var player := get_node_or_null(player_path) as PlayerController
 	if player == null:
-		status_value.text = "NO PLAYER"
 		return
 
 	_player = player
-	_create_check_indicator()
 	player.ammo_changed.connect(_on_ammo_changed)
 	player.reload_started.connect(_on_reload_started)
 	player.chambering_started.connect(_on_chambering_started)
@@ -55,40 +62,22 @@ func _ready() -> void:
 			float(player.call("get_field_magazine_loading_progress")),
 			bool(player.call("is_field_magazine_loading"))
 		)
-	_on_ammo_changed(player.current_ammo, player.reserve_ammo)
 
 
 func _process(delta: float) -> void:
-	if _reload_remaining > 0.0:
-		_reload_remaining -= delta
-		if _reload_remaining > 0.0:
-			status_value.text = "%s %.1f" % [_status_timer_label, _reload_remaining]
-		elif _field_loading_active:
-			status_value.text = "LOAD"
-
-	if _check_remaining > 0.0:
-		_check_remaining -= delta
-		var progress := 1.0 - clampf(_check_remaining / maxf(_check_duration, 0.01), 0.0, 1.0)
-		status_value.text = "CHECK %.1f" % maxf(_check_remaining, 0.0)
-		if _check_indicator != null:
-			_check_indicator.visible = true
-			_check_indicator.set("progress", progress)
-
+	_update_cursor_operation(delta)
 	_update_loaded_detail(delta)
+	_update_active_frame_blink(delta)
 	_layout_magazine_panel()
-	_layout_check_indicator()
+	_layout_cursor_operation_indicator()
 
 
-func _setup_status_panel() -> void:
+func _hide_status_panel() -> void:
+	panel.visible = false
 	ammo_value.visible = false
 	ammo_value.text = ""
-	panel.custom_minimum_size = Vector2(150.0, 54.0)
-	panel.size = panel.custom_minimum_size
-	panel.add_theme_stylebox_override("panel", _make_flat_style(
-		Color(0.04, 0.045, 0.05, 0.82),
-		Color(0.24, 0.26, 0.28, 0.95),
-		1
-	))
+	status_value.visible = false
+	status_value.text = ""
 
 
 func _setup_magazine_panel() -> void:
@@ -96,55 +85,41 @@ func _setup_magazine_panel() -> void:
 	if old_parent != null:
 		old_parent.remove_child(magazine_row)
 
-	_magazine_panel = PanelContainer.new()
+	_magazine_panel = Panel.new()
 	_magazine_panel.name = "MagazinePanel"
 	_magazine_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_magazine_panel.custom_minimum_size = Vector2(180.0, 68.0)
 	_magazine_panel.add_theme_stylebox_override("panel", _make_flat_style(
-		Color(0.035, 0.04, 0.045, 0.74),
-		Color(0.22, 0.24, 0.26, 0.9),
+		Color(0.035, 0.04, 0.045, 0.76),
+		Color(0.22, 0.24, 0.26, 0.92),
 		1
 	))
 	root.add_child(_magazine_panel)
 
-	var margin := MarginContainer.new()
-	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	margin.add_theme_constant_override("margin_left", 10)
-	margin.add_theme_constant_override("margin_top", 8)
-	margin.add_theme_constant_override("margin_right", 10)
-	margin.add_theme_constant_override("margin_bottom", 8)
-	_magazine_panel.add_child(margin)
-
-	var rows := VBoxContainer.new()
-	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rows.add_theme_constant_override("separation", 4)
-	margin.add_child(rows)
-
-	magazine_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	magazine_row.add_theme_constant_override("separation", 8)
-	rows.add_child(magazine_row)
-
 	_loaded_detail_label = Label.new()
+	_loaded_detail_label.name = "LoadedDetailLabel"
 	_loaded_detail_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_loaded_detail_label.visible = false
 	_loaded_detail_label.modulate = Color(0.88, 0.9, 0.86, 0.0)
-	_loaded_detail_label.add_theme_font_size_override("font_size", 13)
-	rows.add_child(_loaded_detail_label)
+	_loaded_detail_label.add_theme_font_size_override("font_size", 29)
+	_loaded_detail_label.add_theme_color_override("font_color", Color(0.88, 0.9, 0.86, 1.0))
+	_magazine_panel.add_child(_loaded_detail_label)
+
+	magazine_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	magazine_row.add_theme_constant_override("separation", int(MAGAZINE_ROW_SEPARATION))
+	_magazine_panel.add_child(magazine_row)
 
 
-func _on_ammo_changed(current_ammo: int, reserve_ammo: int) -> void:
-	ammo_value.visible = false
-	_reload_remaining = 0.0
+func _create_cursor_operation_indicator() -> void:
+	_cursor_operation_indicator = MAGAZINE_LOAD_INDICATOR_SCRIPT.new() as Control
+	_cursor_operation_indicator.name = "CursorOperationIndicator"
+	_cursor_operation_indicator.visible = false
+	_cursor_operation_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cursor_operation_indicator.size = CURSOR_INDICATOR_SIZE
+	_cursor_operation_indicator.set("progress", 0.0)
+	root.add_child(_cursor_operation_indicator)
 
-	if current_ammo <= 0 and reserve_ammo > 0:
-		status_value.text = "EMPTY"
-	elif current_ammo <= 0 and reserve_ammo <= 0:
-		status_value.text = "NO AMMO"
-	elif _field_loading_active:
-		status_value.text = "LOAD"
-	else:
-		status_value.text = "READY"
 
+func _on_ammo_changed(_current_ammo: int, _reserve_ammo: int) -> void:
 	if _player != null and _player.has_method("get_loaded_ammo_detail"):
 		var detail: Dictionary = _player.call("get_loaded_ammo_detail")
 		if not bool(detail.get("is_checked", false)):
@@ -152,30 +127,19 @@ func _on_ammo_changed(current_ammo: int, reserve_ammo: int) -> void:
 
 
 func _on_reload_started(duration: float) -> void:
-	_status_timer_label = "RELOAD"
-	_reload_remaining = duration
-	status_value.text = "RELOAD %.1f" % _reload_remaining
+	_start_cursor_operation(duration)
 
 
 func _on_chambering_started(duration: float) -> void:
-	_status_timer_label = "CHAMBER"
-	_reload_remaining = duration
-	status_value.text = "CHAMBER %.1f" % _reload_remaining
+	_start_cursor_operation(duration)
 
 
 func _on_loaded_magazine_check_started(duration: float) -> void:
-	_check_duration = maxf(duration, 0.01)
-	_check_remaining = _check_duration
-	status_value.text = "CHECK %.1f" % _check_remaining
-	if _check_indicator != null:
-		_check_indicator.visible = true
-		_check_indicator.set("progress", 0.0)
+	_start_cursor_operation(duration)
 
 
 func _on_loaded_magazine_check_finished(succeeded: bool) -> void:
-	_check_remaining = 0.0
-	if _check_indicator != null:
-		_check_indicator.visible = false
+	_stop_cursor_operation()
 	if succeeded:
 		_show_loaded_detail()
 	else:
@@ -192,44 +156,58 @@ func _on_magazine_status_changed(
 	_last_magazines = magazines.duplicate(true)
 	_refresh_magazine_row(loading_entry_id, loading_progress)
 
-	if _field_loading_active and _reload_remaining <= 0.0:
-		status_value.text = "LOAD"
-
 
 func _refresh_magazine_row(loading_entry_id: int = -1, loading_progress: float = 0.0) -> void:
 	_clear_magazine_row()
+	_active_magazine_frames.clear()
 	for magazine in _last_magazines:
-		var icon := _create_magazine_icon(magazine, loading_entry_id, loading_progress)
+		var icon := _create_magazine_slot(magazine, loading_entry_id, loading_progress)
 		magazine_row.add_child(icon)
 	_layout_magazine_panel()
 
 
-func _create_magazine_icon(magazine: Dictionary, loading_entry_id: int, loading_progress: float) -> Control:
+func _create_magazine_slot(magazine: Dictionary, loading_entry_id: int, loading_progress: float) -> Control:
 	var capacity := maxi(int(magazine.get("capacity", 0)), 1)
 	var ammo_count := clampi(int(magazine.get("ammo_count", 0)), 0, capacity)
 	var entry_id := int(magazine.get("entry_id", -1))
+	var is_checked := bool(magazine.get("is_checked", false))
 	var is_active := bool(magazine.get("is_active_magazine", false))
-	var should_reveal_loaded := is_active and _is_loaded_detail_visible()
+
+	var slot := Control.new()
+	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot.custom_minimum_size = MAGAZINE_SLOT_SIZE
+	slot.size = MAGAZINE_SLOT_SIZE
 
 	var icon := Panel.new()
-	icon.custom_minimum_size = Vector2(24.0, 38.0)
-	icon.size = icon.custom_minimum_size
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.position = (MAGAZINE_SLOT_SIZE - MAGAZINE_ICON_SIZE) * 0.5
+	icon.size = MAGAZINE_ICON_SIZE
 	icon.add_theme_stylebox_override("panel", _make_flat_style(
 		Color(0.07, 0.09, 0.1, 0.92),
 		Color(0.46, 0.5, 0.54, 1.0),
-		1
+		2
 	))
+	slot.add_child(icon)
 
-	if should_reveal_loaded:
+	if is_checked:
 		var fill := ColorRect.new()
 		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		fill.color = Color(0.28, 0.68, 0.78, 0.82)
+		fill.color = Color(0.28, 0.68, 0.78, 0.84)
 		fill.anchor_left = 0.18
 		fill.anchor_right = 0.82
 		fill.anchor_bottom = 0.88
 		fill.anchor_top = 0.88 - 0.72 * (float(ammo_count) / float(capacity))
 		icon.add_child(fill)
+	else:
+		var unknown := Label.new()
+		unknown.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		unknown.set_anchors_preset(Control.PRESET_FULL_RECT)
+		unknown.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		unknown.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		unknown.text = "?"
+		unknown.modulate = Color(0.78, 0.8, 0.76, 0.78)
+		unknown.add_theme_font_size_override("font_size", 42)
+		icon.add_child(unknown)
 
 	if entry_id == loading_entry_id:
 		var indicator := MAGAZINE_LOAD_INDICATOR_SCRIPT.new() as Control
@@ -238,34 +216,19 @@ func _create_magazine_icon(magazine: Dictionary, loading_entry_id: int, loading_
 		icon.add_child(indicator)
 
 	if is_active:
-		return _wrap_active_magazine_icon(icon)
-	return icon
+		var active_frame := Panel.new()
+		active_frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		active_frame.position = Vector2.ZERO
+		active_frame.size = MAGAZINE_SLOT_SIZE
+		active_frame.add_theme_stylebox_override("panel", _make_flat_style(
+			Color(0, 0, 0, 0),
+			Color(1.0, 0.5, 0.12, 1.0),
+			ACTIVE_BORDER_WIDTH
+		))
+		slot.add_child(active_frame)
+		_active_magazine_frames.append(active_frame)
 
-
-func _wrap_active_magazine_icon(icon: Control) -> Control:
-	var wrapper := Control.new()
-	wrapper.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrapper.custom_minimum_size = Vector2(36.0, 44.0)
-	wrapper.size = wrapper.custom_minimum_size
-	icon.position = Vector2(6.0, 3.0)
-	wrapper.add_child(icon)
-
-	_add_bracket_rect(wrapper, Vector2(0.0, 6.0), Vector2(2.0, 32.0))
-	_add_bracket_rect(wrapper, Vector2(0.0, 6.0), Vector2(7.0, 2.0))
-	_add_bracket_rect(wrapper, Vector2(0.0, 36.0), Vector2(7.0, 2.0))
-	_add_bracket_rect(wrapper, Vector2(34.0, 6.0), Vector2(2.0, 32.0))
-	_add_bracket_rect(wrapper, Vector2(29.0, 6.0), Vector2(7.0, 2.0))
-	_add_bracket_rect(wrapper, Vector2(29.0, 36.0), Vector2(7.0, 2.0))
-	return wrapper
-
-
-func _add_bracket_rect(parent: Control, position: Vector2, size: Vector2) -> void:
-	var rect := ColorRect.new()
-	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	rect.position = position
-	rect.size = size
-	rect.color = Color(1.0, 0.5, 0.12, 0.95)
-	parent.add_child(rect)
+	return slot
 
 
 func _show_loaded_detail() -> void:
@@ -331,39 +294,89 @@ func _is_loaded_detail_visible() -> bool:
 	return _loaded_detail_hold_remaining > 0.0 or _loaded_detail_fade_remaining > 0.0
 
 
+func _start_cursor_operation(duration: float) -> void:
+	_cursor_operation_duration = maxf(duration, 0.01)
+	_cursor_operation_remaining = _cursor_operation_duration
+	if _cursor_operation_indicator != null:
+		_cursor_operation_indicator.visible = true
+		_cursor_operation_indicator.set("progress", 0.0)
+		_layout_cursor_operation_indicator()
+
+
+func _stop_cursor_operation() -> void:
+	_cursor_operation_remaining = 0.0
+	_cursor_operation_duration = 0.0
+	if _cursor_operation_indicator != null:
+		_cursor_operation_indicator.visible = false
+		_cursor_operation_indicator.set("progress", 0.0)
+
+
+func _update_cursor_operation(delta: float) -> void:
+	if _cursor_operation_remaining <= 0.0:
+		return
+
+	_cursor_operation_remaining = maxf(_cursor_operation_remaining - delta, 0.0)
+	var progress := 1.0 - clampf(_cursor_operation_remaining / maxf(_cursor_operation_duration, 0.01), 0.0, 1.0)
+	if _cursor_operation_indicator != null:
+		_cursor_operation_indicator.visible = true
+		_cursor_operation_indicator.set("progress", progress)
+	if _cursor_operation_remaining <= 0.0 and _cursor_operation_indicator != null:
+		_cursor_operation_indicator.visible = false
+
+
+func _update_active_frame_blink(delta: float) -> void:
+	_active_border_blink_time += delta
+	var alpha: float = 0.35 + 0.65 * ((sin(_active_border_blink_time * 5.6) + 1.0) * 0.5)
+	for frame in _active_magazine_frames:
+		if is_instance_valid(frame):
+			frame.modulate.a = alpha
+
+
 func _clear_magazine_row() -> void:
 	for child in magazine_row.get_children():
 		magazine_row.remove_child(child)
 		child.queue_free()
 
 
-func _create_check_indicator() -> void:
-	_check_indicator = MAGAZINE_LOAD_INDICATOR_SCRIPT.new() as Control
-	_check_indicator.name = "LoadedMagazineCheckIndicator"
-	_check_indicator.visible = false
-	_check_indicator.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_check_indicator.size = Vector2(42.0, 42.0)
-	_check_indicator.set("progress", 0.0)
-	root.add_child(_check_indicator)
-
-
 func _layout_magazine_panel() -> void:
 	if _magazine_panel == null:
 		return
 
-	_magazine_panel.size = _magazine_panel.get_combined_minimum_size()
+	var detail_height := MAGAZINE_DETAIL_HEIGHT if _is_loaded_detail_visible() else 0.0
+	var row_width := _get_magazine_row_width()
+	var panel_width := maxf(260.0, row_width + MAGAZINE_PANEL_PADDING.x * 2.0)
+	var panel_height := MAGAZINE_PANEL_PADDING.y * 2.0 + MAGAZINE_SLOT_SIZE.y + detail_height
+	_magazine_panel.size = Vector2(panel_width, panel_height)
+
+	_loaded_detail_label.visible = _is_loaded_detail_visible()
+	_loaded_detail_label.position = MAGAZINE_PANEL_PADDING
+	_loaded_detail_label.size = Vector2(panel_width - MAGAZINE_PANEL_PADDING.x * 2.0, MAGAZINE_DETAIL_HEIGHT)
+
+	magazine_row.position = Vector2(
+		MAGAZINE_PANEL_PADDING.x,
+		panel_height - MAGAZINE_PANEL_PADDING.y - MAGAZINE_SLOT_SIZE.y
+	)
+
 	var viewport_size := get_viewport().get_visible_rect().size
 	_magazine_panel.position = Vector2(
 		magazine_panel_margin.x,
-		maxf(magazine_panel_margin.y, viewport_size.y - _magazine_panel.size.y - magazine_panel_margin.y)
+		maxf(magazine_panel_margin.y, viewport_size.y - panel_height - magazine_panel_margin.y)
 	)
 
 
-func _layout_check_indicator() -> void:
-	if _check_indicator == null or _magazine_panel == null:
+func _get_magazine_row_width() -> float:
+	var count := magazine_row.get_child_count()
+	if count <= 0:
+		return 0.0
+	return float(count) * MAGAZINE_SLOT_SIZE.x + float(count - 1) * MAGAZINE_ROW_SEPARATION
+
+
+func _layout_cursor_operation_indicator() -> void:
+	if _cursor_operation_indicator == null:
 		return
 
-	_check_indicator.position = _magazine_panel.position + Vector2(_magazine_panel.size.x + 8.0, 6.0)
+	_cursor_operation_indicator.size = CURSOR_INDICATOR_SIZE
+	_cursor_operation_indicator.position = get_viewport().get_mouse_position() - CURSOR_INDICATOR_SIZE * 0.5
 
 
 func _make_flat_style(background_color: Color, border_color: Color, border_width: int) -> StyleBoxFlat:
