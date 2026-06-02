@@ -15,6 +15,7 @@ magazine_item_id = &"pistol_magazine"
 chamber_size = 1
 starting_spare_magazines = 3
 reload_time = 1.2
+chamber_feed_time = 0.5
 fire_cooldown = 0.22
 recoil_amount = 0.18
 recoil_recovery_speed = 8.0

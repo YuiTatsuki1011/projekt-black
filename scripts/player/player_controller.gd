@@ -4,6 +4,7 @@ class_name PlayerController
 signal ammo_changed(current_ammo: int, reserve_ammo: int)
 signal fired(ammo_remaining: int)
 signal reload_started(duration: float)
+signal chambering_started(duration: float)
 signal interact_requested
 signal died
 signal stamina_changed(current_stamina: float, max_stamina: float, overheated: bool, melee_available: bool)
@@ -33,6 +34,7 @@ enum MeleeState {
 @export var chamber_size: int = 1
 @export var starting_spare_magazines: int = 3
 @export var reload_time: float = 1.2
+@export var chamber_feed_time: float = 0.5
 @export var fire_cooldown: float = 0.22
 @export var recoil_amount: float = 0.18
 @export var recoil_recovery_speed: float = 8.0
@@ -91,6 +93,8 @@ var _gravity: float = 980.0
 var _fire_cooldown_remaining: float = 0.0
 var _reload_remaining: float = 0.0
 var _is_reloading: bool = false
+var _chambering_remaining: float = 0.0
+var _is_chambering: bool = false
 var _is_crouching: bool = false
 var _is_dead: bool = false
 var _is_inventory_open: bool = false
@@ -189,6 +193,7 @@ func _apply_ranged_weapon_stats(ranged_weapon: Resource) -> void:
 	chamber_size = int(_get_resource_value(ranged_weapon, &"chamber_size", chamber_size))
 	starting_spare_magazines = int(_get_resource_value(ranged_weapon, &"starting_spare_magazines", starting_spare_magazines))
 	reload_time = float(_get_resource_value(ranged_weapon, &"reload_time", reload_time))
+	chamber_feed_time = float(_get_resource_value(ranged_weapon, &"chamber_feed_time", chamber_feed_time))
 	fire_cooldown = float(_get_resource_value(ranged_weapon, &"fire_cooldown", fire_cooldown))
 	recoil_amount = float(_get_resource_value(ranged_weapon, &"recoil_amount", recoil_amount))
 	recoil_recovery_speed = float(_get_resource_value(ranged_weapon, &"recoil_recovery_speed", recoil_recovery_speed))
@@ -219,6 +224,7 @@ func _clear_ranged_weapon_stats() -> void:
 	chamber_size = 0
 	starting_spare_magazines = 0
 	reload_time = 0.0
+	chamber_feed_time = 0.0
 	fire_cooldown = 0.0
 	recoil_amount = 0.0
 	_recoil = 0.0
@@ -348,6 +354,7 @@ func _load_active_firearm_ammo() -> void:
 		current_ammo = 0
 		magazine_ammo = 0
 		chamber_ammo = 0
+		_cancel_chambering()
 		return
 
 	if not _firearm_magazine_rounds_by_slot.has(_active_firearm_slot):
@@ -376,6 +383,7 @@ func _on_equipment_changed(slot: StringName) -> void:
 		_load_active_firearm_ammo()
 		_is_reloading = false
 		_reload_remaining = 0.0
+		_cancel_chambering()
 		_sync_reserve_ammo()
 
 	if slot == &"melee":
@@ -421,6 +429,11 @@ func _update_timers(delta: float) -> void:
 		_reload_remaining -= delta
 		if _reload_remaining <= 0.0:
 			_finish_reload()
+
+	if _is_chambering:
+		_chambering_remaining -= delta
+		if _chambering_remaining <= 0.0:
+			_finish_chambering()
 
 
 func _update_stamina(delta: float) -> void:
@@ -482,6 +495,8 @@ func _handle_actions() -> void:
 
 	_handle_firearm_slot_inputs()
 	_update_sub_weapon_aiming()
+	if _is_chambering:
+		return
 
 	var sub_weapon_modifier_pressed := (
 		Input.is_action_pressed("sub_weapon_aim")
@@ -555,17 +570,15 @@ func _try_fire() -> void:
 	if not _has_ranged_weapon:
 		return
 
-	if _is_reloading or _fire_cooldown_remaining > 0.0:
+	if _is_reloading or _is_chambering or _fire_cooldown_remaining > 0.0:
 		return
 
 	if current_ammo <= 0:
 		_start_reload()
 		return
 	if chamber_size > 0 and chamber_ammo <= 0:
-		_feed_chamber_if_empty()
-		_commit_loaded_ammo_change()
-		if chamber_ammo <= 0:
-			return
+		_start_chambering()
+		return
 
 	if projectile_scene == null:
 		return
@@ -599,7 +612,14 @@ func _start_reload() -> void:
 	if not _has_ranged_weapon:
 		return
 
-	if _is_reloading or _find_best_reload_magazine_entry_id() < 0:
+	if _is_reloading or _is_chambering:
+		return
+
+	if _can_chamber_from_magazine():
+		_start_chambering()
+		return
+
+	if _find_best_reload_magazine_entry_id() < 0:
 		return
 
 	_is_reloading = true
@@ -631,13 +651,13 @@ func _finish_reload() -> void:
 	magazine_ammo = _get_magazine_rounds_from_metadata(next_metadata, next_magazine_entry.get("item_id", magazine_item_id))
 	magazine_item_id = next_magazine_entry.get("item_id", magazine_item_id)
 	_firearm_has_magazine_by_slot[_active_firearm_slot] = true
-	_feed_chamber_if_empty()
 	_update_current_ammo_from_loaded_parts()
 	_save_active_firearm_ammo()
 	_suppress_inventory_ammo_signal = false
 	_is_reloading = false
 	_reload_remaining = 0.0
 	_sync_reserve_ammo()
+	_start_chambering()
 
 
 func _update_dodge(delta: float) -> void:
@@ -922,6 +942,7 @@ func set_inventory_open(is_open: bool) -> void:
 		_sub_weapon_fire_was_pressed = false
 		_is_reloading = false
 		_reload_remaining = 0.0
+		_cancel_chambering()
 		_set_sub_weapon_aim_visual(false)
 		if _melee_state != MeleeState.READY:
 			_cancel_melee_attack()
@@ -1021,6 +1042,43 @@ func _feed_chamber_if_empty() -> void:
 	magazine_ammo -= 1
 
 
+func _can_chamber_from_magazine() -> bool:
+	return (
+		_has_ranged_weapon
+		and chamber_size > 0
+		and chamber_ammo <= 0
+		and magazine_ammo > 0
+		and _has_active_magazine_inserted()
+	)
+
+
+func _start_chambering() -> bool:
+	if not _can_chamber_from_magazine():
+		return false
+
+	if chamber_feed_time <= 0.0:
+		_finish_chambering()
+		return true
+
+	_is_chambering = true
+	_chambering_remaining = chamber_feed_time
+	chambering_started.emit(chamber_feed_time)
+	return true
+
+
+func _finish_chambering() -> void:
+	_is_chambering = false
+	_chambering_remaining = 0.0
+	if _can_chamber_from_magazine():
+		_feed_chamber_if_empty()
+	_commit_loaded_ammo_change()
+
+
+func _cancel_chambering() -> void:
+	_is_chambering = false
+	_chambering_remaining = 0.0
+
+
 func _has_active_magazine_inserted() -> bool:
 	return bool(_firearm_has_magazine_by_slot.get(_active_firearm_slot, magazine_size > 0))
 
@@ -1048,10 +1106,10 @@ func insert_active_magazine(item_id: StringName, metadata: Dictionary = {}) -> b
 	if not can_insert_active_magazine(item_id, metadata):
 		return false
 
+	_cancel_chambering()
 	magazine_ammo = _get_magazine_rounds_from_metadata(metadata, item_id)
 	magazine_item_id = item_id
 	_firearm_has_magazine_by_slot[_active_firearm_slot] = true
-	_feed_chamber_if_empty()
 	_commit_loaded_ammo_change()
 	return true
 
@@ -1060,6 +1118,7 @@ func eject_active_magazine() -> Dictionary:
 	if not _has_active_magazine_inserted():
 		return {}
 
+	_cancel_chambering()
 	var ejected := {
 		"item_id": magazine_item_id,
 		"metadata": _make_magazine_metadata(magazine_ammo),
@@ -1078,6 +1137,7 @@ func insert_chamber_round(item_id: StringName) -> bool:
 	if not can_insert_chamber_round(item_id):
 		return false
 
+	_cancel_chambering()
 	chamber_ammo += 1
 	_commit_loaded_ammo_change()
 	return true
@@ -1087,8 +1147,8 @@ func eject_chamber_round() -> Dictionary:
 	if not _has_ranged_weapon or chamber_ammo <= 0 or ammo_item_id == &"":
 		return {}
 
+	_cancel_chambering()
 	chamber_ammo -= 1
-	_feed_chamber_if_empty()
 	var ejected := {
 		"item_id": ammo_item_id,
 		"quantity": 1,
