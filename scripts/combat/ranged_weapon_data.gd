@@ -12,6 +12,7 @@ class_name RangedWeaponData
 @export_range(0, 20, 1) var starting_spare_magazines: int = 3
 @export var reload_time: float = 1.2
 @export var chamber_feed_time: float = 0.5
+@export var loaded_magazine_check_time: float = 0.5
 @export var field_magazine_load_time_per_round: float = 0.28
 @export var fire_cooldown: float = 0.22
 @export var recoil_amount: float = 0.18

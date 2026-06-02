@@ -336,6 +336,7 @@ func get_magazine_entry_info(entry_id: int) -> Dictionary:
 		"ammo_item_id": ammo_item_id,
 		"ammo_count": ammo_count,
 		"capacity": capacity,
+		"is_checked": bool(metadata.get("is_checked", false)),
 		"position": entry.get("position", Vector2i.ZERO),
 	}
 
@@ -420,7 +421,26 @@ func load_round_into_magazine(magazine_entry_id: int, ammo_inventory: Node, ammo
 	metadata["ammo_count"] = int(magazine_info.get("ammo_count", 0)) + 1
 	metadata["capacity"] = int(magazine_info.get("capacity", 0))
 	metadata["ammo_item_id"] = StringName(magazine_info.get("ammo_item_id", &""))
+	metadata["is_checked"] = true
 	return set_entry_metadata(magazine_entry_id, metadata)
+
+
+func set_magazine_entry_checked(entry_id: int, is_checked: bool = true) -> bool:
+	var magazine_info := get_magazine_entry_info(entry_id)
+	if magazine_info.is_empty():
+		return false
+
+	var metadata := get_entry_metadata(entry_id)
+	metadata["ammo_count"] = int(magazine_info.get("ammo_count", 0))
+	metadata["capacity"] = int(magazine_info.get("capacity", 0))
+	metadata["ammo_item_id"] = StringName(magazine_info.get("ammo_item_id", &""))
+	metadata["is_checked"] = is_checked
+	return set_entry_metadata(entry_id, metadata)
+
+
+func is_magazine_entry_checked(entry_id: int) -> bool:
+	var magazine_info := get_magazine_entry_info(entry_id)
+	return bool(magazine_info.get("is_checked", false)) if not magazine_info.is_empty() else false
 
 
 func set_entry_metadata(entry_id: int, metadata: Dictionary) -> bool:
