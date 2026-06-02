@@ -40,13 +40,11 @@ const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4
 @export var inventory_camera_position: Vector2 = Vector2(92, -25)
 @export var inventory_camera_zoom: Vector2 = Vector2(6.2, 6.2)
 @export var camera_transition_time: float = 0.18
-@export var inventory_panel_scale: Vector2 = Vector2(1.22, 1.22)
+@export var inventory_panel_scale: Vector2 = Vector2(1.16, 1.16)
 @export var screen_margin: float = 28.0
-@export var screen_column_gap: float = 22.0
-@export_range(0.2, 0.45, 0.01) var external_panel_width_ratio: float = 0.31
-@export var external_panel_min_width: float = 500.0
-@export var gear_panel_min_width: float = 520.0
-@export var gear_panel_normal_width: float = 592.0
+@export var screen_panel_gap: float = 14.0
+@export var player_menu_panel_height: float = 166.0
+@export var container_panel_height: float = 250.0
 
 @onready var root: Control = $Root
 @onready var shade: ColorRect = $Root/Shade
@@ -176,14 +174,11 @@ func _setup_workspace_layout() -> void:
 	_gear_panel.add_child(gear_margin)
 	var gear_rows := VBoxContainer.new()
 	gear_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	gear_rows.add_theme_constant_override("separation", 12)
+	gear_rows.add_theme_constant_override("separation", 10)
 	gear_margin.add_child(gear_rows)
 
-	_add_section_title(gear_rows, "OPERATOR")
-	gear_rows.add_child(_create_operator_profile())
-	_add_section_title(gear_rows, "GEAR")
+	_add_section_title(gear_rows, "PLAYER")
 	_move_equipment_root_to(gear_rows)
-	_add_section_title(gear_rows, "VITALS")
 	gear_rows.add_child(_create_status_strip())
 
 	_external_panel = _create_workspace_panel("ExternalInventoryPanel")
@@ -192,9 +187,9 @@ func _setup_workspace_layout() -> void:
 	_external_panel.add_child(external_margin)
 	var external_rows := VBoxContainer.new()
 	external_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	external_rows.add_theme_constant_override("separation", 12)
+	external_rows.add_theme_constant_override("separation", 10)
 	external_margin.add_child(external_rows)
-	_add_section_title(external_rows, "EXTERNAL")
+	_add_section_title(external_rows, "CONTAINER")
 	external_rows.add_child(_create_external_grid_placeholder())
 
 
@@ -234,88 +229,16 @@ func _add_section_title(parent: Node, text: String) -> void:
 	parent.add_child(label)
 
 
-func _create_operator_profile() -> Control:
-	var profile := Control.new()
-	profile.name = "OperatorProfile"
-	profile.custom_minimum_size = Vector2(0, 310)
-	profile.mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	var silhouette := ColorRect.new()
-	silhouette.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	silhouette.color = Color(0.22, 0.24, 0.27, 0.36)
-	silhouette.position = Vector2(205, 26)
-	silhouette.size = Vector2(120, 246)
-	profile.add_child(silhouette)
-
-	var head := ColorRect.new()
-	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	head.color = Color(0.34, 0.36, 0.39, 0.42)
-	head.position = Vector2(240, 0)
-	head.size = Vector2(50, 48)
-	profile.add_child(head)
-
-	var left_arm := ColorRect.new()
-	left_arm.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	left_arm.color = Color(0.18, 0.2, 0.23, 0.35)
-	left_arm.position = Vector2(142, 70)
-	left_arm.size = Vector2(56, 154)
-	profile.add_child(left_arm)
-
-	var right_arm := ColorRect.new()
-	right_arm.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	right_arm.color = Color(0.18, 0.2, 0.23, 0.35)
-	right_arm.position = Vector2(332, 70)
-	right_arm.size = Vector2(56, 154)
-	profile.add_child(right_arm)
-
-	var label_specs := [
-		["HEAD", Vector2(18, 18), Vector2(132, 58)],
-		["TORSO", Vector2(18, 92), Vector2(132, 100)],
-		["BACK", Vector2(18, 210), Vector2(132, 72)],
-		["SIDE", Vector2(390, 18), Vector2(132, 74)],
-		["SUB", Vector2(390, 108), Vector2(132, 74)],
-		["UTILITY", Vector2(390, 198), Vector2(132, 84)],
-	]
-	for spec in label_specs:
-		profile.add_child(_create_profile_slot(str(spec[0]), spec[1], spec[2]))
-
-	return profile
-
-
-func _create_profile_slot(slot_name: String, slot_position: Vector2, slot_size: Vector2) -> Panel:
-	var slot_panel := Panel.new()
-	slot_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	slot_panel.position = slot_position
-	slot_panel.size = slot_size
-	slot_panel.add_theme_stylebox_override("panel", _make_flat_style(
-		Color(0.08, 0.09, 0.1, 0.68),
-		Color(0.38, 0.41, 0.45, 0.88),
-		1
-	))
-
-	var label := Label.new()
-	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	label.text = slot_name
-	label.modulate = WORKSPACE_MUTED_COLOR
-	label.add_theme_font_size_override("font_size", 10)
-	label.offset_left = 8
-	label.offset_top = 6
-	label.offset_right = -8
-	label.offset_bottom = -6
-	slot_panel.add_child(label)
-	return slot_panel
-
-
 func _move_equipment_root_to(parent: Node) -> void:
 	if equipment_root.get_parent() != null:
 		equipment_root.get_parent().remove_child(equipment_root)
 	parent.add_child(equipment_root)
-	equipment_root.custom_minimum_size = Vector2(0, 170)
+	equipment_root.custom_minimum_size = Vector2(0, 56)
 	if equipment_root is GridContainer:
 		var grid := equipment_root as GridContainer
-		grid.columns = 2
-		grid.add_theme_constant_override("h_separation", 10)
-		grid.add_theme_constant_override("v_separation", 10)
+		grid.columns = 5
+		grid.add_theme_constant_override("h_separation", 8)
+		grid.add_theme_constant_override("v_separation", 8)
 
 
 func _create_status_strip() -> GridContainer:
@@ -323,8 +246,8 @@ func _create_status_strip() -> GridContainer:
 	status_grid.name = "StatusGrid"
 	status_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	status_grid.columns = 3
-	status_grid.add_theme_constant_override("h_separation", 10)
-	status_grid.add_theme_constant_override("v_separation", 10)
+	status_grid.add_theme_constant_override("h_separation", 8)
+	status_grid.add_theme_constant_override("v_separation", 8)
 	_status_value_labels.clear()
 	_add_status_card(status_grid, &"health", "HP", "-- / --")
 	_add_status_card(status_grid, &"stamina", "STAMINA", "-- / --")
@@ -335,7 +258,7 @@ func _create_status_strip() -> GridContainer:
 func _add_status_card(parent: Node, key: StringName, title: String, value: String) -> void:
 	var card := Panel.new()
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	card.custom_minimum_size = Vector2(160, 58)
+	card.custom_minimum_size = Vector2(190, 42)
 	card.add_theme_stylebox_override("panel", _make_flat_style(
 		Color(0.07, 0.075, 0.085, 0.88),
 		WORKSPACE_PANEL_BORDER_COLOR,
@@ -354,14 +277,14 @@ func _add_status_card(parent: Node, key: StringName, title: String, value: Strin
 	title_label_node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title_label_node.text = title
 	title_label_node.modulate = WORKSPACE_MUTED_COLOR
-	title_label_node.add_theme_font_size_override("font_size", 10)
+	title_label_node.add_theme_font_size_override("font_size", 9)
 	rows.add_child(title_label_node)
 
 	var value_label := Label.new()
 	value_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	value_label.text = value
 	value_label.modulate = DETAIL_TEXT_COLOR
-	value_label.add_theme_font_size_override("font_size", 16)
+	value_label.add_theme_font_size_override("font_size", 13)
 	value_label.clip_text = true
 	rows.add_child(value_label)
 	_status_value_labels[key] = value_label
@@ -371,19 +294,19 @@ func _create_external_grid_placeholder() -> Control:
 	var holder := Control.new()
 	holder.name = "ExternalGridPlaceholder"
 	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	holder.custom_minimum_size = Vector2(0, 760)
+	holder.custom_minimum_size = Vector2(0, 174)
 
 	var placeholder_label := Label.new()
 	placeholder_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	placeholder_label.text = "NO CONTAINER"
+	placeholder_label.text = "ITEM CONTAINER"
 	placeholder_label.modulate = WORKSPACE_MUTED_COLOR
 	placeholder_label.add_theme_font_size_override("font_size", 13)
 	placeholder_label.position = Vector2(12, 10)
 	holder.add_child(placeholder_label)
 
-	var columns := 8
-	var rows := 14
-	var cell := 42
+	var columns := 10
+	var rows := 3
+	var cell := 48
 	var gap := 2
 	for y in rows:
 		for x in columns:
@@ -508,33 +431,30 @@ func _set_crosshair_hidden_for_inventory(is_inventory_open: bool) -> void:
 func _layout_realtime_inventory() -> void:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
 	var has_external_inventory := _external_inventory_visible
-	var external_width := maxf(viewport_size.x * external_panel_width_ratio, external_panel_min_width)
-	var external_height := viewport_size.y - screen_margin * 2.0
-	var external_x := viewport_size.x - external_width - screen_margin
-	if is_instance_valid(_external_panel):
-		_external_panel.visible = has_external_inventory
-		_external_panel.position = Vector2(external_x, screen_margin)
-		_external_panel.size = Vector2(external_width, external_height)
 
 	panel.scale = inventory_panel_scale
 	panel.size = panel.get_combined_minimum_size()
 	var panel_size := panel.size
 	var scaled_panel_size := panel_size * panel.scale
-	var gear_width := gear_panel_normal_width
-	var content_left := screen_margin + gear_width + screen_column_gap
-	var content_right := external_x - screen_column_gap if has_external_inventory else viewport_size.x - screen_margin
-	var target_x: float = content_left + maxf((content_right - content_left - scaled_panel_size.x) * 0.5, 0.0)
-	if has_external_inventory:
-		target_x = external_x - screen_column_gap - scaled_panel_size.x
-	var target_y: float = (viewport_size.y - scaled_panel_size.y) * 0.5
-	panel.position = Vector2(maxf(target_x, screen_margin), maxf(target_y, screen_margin))
+	var menu_width := scaled_panel_size.x
+	var top_panel_height := container_panel_height if has_external_inventory else player_menu_panel_height
+	var total_height := top_panel_height + screen_panel_gap + scaled_panel_size.y
+	var menu_x := (viewport_size.x - menu_width) * 0.5
+	var menu_y := (viewport_size.y - total_height) * 0.5
+	menu_x = maxf(menu_x, screen_margin)
+	menu_y = maxf(menu_y, screen_margin)
 
 	if is_instance_valid(_gear_panel):
-		var gear_x := screen_margin
-		if has_external_inventory:
-			gear_width = maxf(gear_panel_min_width, panel.position.x - screen_column_gap - gear_x)
-		_gear_panel.position = Vector2(gear_x, screen_margin)
-		_gear_panel.size = Vector2(gear_width, viewport_size.y - screen_margin * 2.0)
+		_gear_panel.visible = not has_external_inventory
+		_gear_panel.position = Vector2(menu_x, menu_y)
+		_gear_panel.size = Vector2(menu_width, player_menu_panel_height)
+
+	if is_instance_valid(_external_panel):
+		_external_panel.visible = has_external_inventory
+		_external_panel.position = Vector2(menu_x, menu_y)
+		_external_panel.size = Vector2(menu_width, container_panel_height)
+
+	panel.position = Vector2(menu_x, menu_y + top_panel_height + screen_panel_gap)
 
 
 func _refresh_status_panel() -> void:
@@ -1089,7 +1009,7 @@ func _refresh_equipment(_slot: StringName = &"") -> void:
 func _add_equipment_slot(slot: StringName, slot_name: String) -> void:
 	var slot_panel := Panel.new()
 	slot_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	slot_panel.custom_minimum_size = Vector2(236, 68)
+	slot_panel.custom_minimum_size = Vector2(108, 52)
 	var border_color := SLOT_ACTIVE_BORDER_COLOR if _is_active_firearm_slot(slot) else SLOT_BORDER_COLOR
 	slot_panel.add_theme_stylebox_override("panel", _make_flat_style(SLOT_COLOR, border_color, 1))
 	slot_panel.gui_input.connect(_on_equipment_slot_gui_input.bind(slot))
@@ -1100,9 +1020,9 @@ func _add_equipment_slot(slot: StringName, slot_name: String) -> void:
 	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
 	margin.add_theme_constant_override("margin_left", 10)
-	margin.add_theme_constant_override("margin_top", 7)
+	margin.add_theme_constant_override("margin_top", 6)
 	margin.add_theme_constant_override("margin_right", 10)
-	margin.add_theme_constant_override("margin_bottom", 7)
+	margin.add_theme_constant_override("margin_bottom", 6)
 	slot_panel.add_child(margin)
 
 	var rows := VBoxContainer.new()
@@ -1113,14 +1033,14 @@ func _add_equipment_slot(slot: StringName, slot_name: String) -> void:
 	var title := Label.new()
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	title.text = slot_name
-	title.add_theme_font_size_override("font_size", 9)
+	title.add_theme_font_size_override("font_size", 8)
 	title.modulate = SLOT_ACTIVE_BORDER_COLOR if _is_active_firearm_slot(slot) else Color(0.68, 0.70, 0.74, 1.0)
 	rows.add_child(title)
 
 	var value := Label.new()
 	value.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	value.text = _get_equipped_weapon_name(slot)
-	value.add_theme_font_size_override("font_size", 13)
+	value.add_theme_font_size_override("font_size", 10)
 	value.clip_text = true
 	rows.add_child(value)
 
