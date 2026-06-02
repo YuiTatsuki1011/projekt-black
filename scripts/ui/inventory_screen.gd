@@ -32,6 +32,7 @@ const DRAG_SOURCE_EQUIPMENT := &"equipment"
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
 
 @export var player_path: NodePath = NodePath("../Player")
+@export var crosshair_path: NodePath = NodePath("../Crosshair")
 @export var dropped_item_scene: PackedScene
 @export var close_on_damage: bool = true
 @export var normal_camera_position: Vector2 = Vector2(0, -22)
@@ -45,6 +46,7 @@ const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4
 @export_range(0.2, 0.45, 0.01) var external_panel_width_ratio: float = 0.31
 @export var external_panel_min_width: float = 500.0
 @export var gear_panel_min_width: float = 520.0
+@export var gear_panel_normal_width: float = 592.0
 
 @onready var root: Control = $Root
 @onready var shade: ColorRect = $Root/Shade
@@ -58,6 +60,7 @@ const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4
 @onready var warning_label: Label = $Root/Panel/Margin/Rows/WarningLabel
 
 var _player: Node2D
+var _crosshair: CanvasItem
 var _inventory: Node
 var _equipment: Node
 var _item_nodes: Dictionary = {}
@@ -90,6 +93,8 @@ var _damage_flash_tween: Tween
 var _gear_panel: Panel
 var _external_panel: Panel
 var _status_value_labels: Dictionary = {}
+var _external_inventory_visible: bool = false
+var _crosshair_was_visible_before_inventory: bool = true
 
 
 func _ready() -> void:
@@ -99,6 +104,7 @@ func _ready() -> void:
 	shade.color = Color(0.025, 0.025, 0.028, 0.42)
 	_setup_background_blur()
 	_setup_workspace_layout()
+	_crosshair = get_node_or_null(crosshair_path) as CanvasItem
 
 	var player := get_node_or_null(player_path)
 	if player != null:
@@ -430,6 +436,7 @@ func set_inventory_open(is_open: bool) -> void:
 	_is_open = is_open
 	root.visible = is_open
 	get_tree().paused = false
+	_set_crosshair_hidden_for_inventory(is_open)
 	if _player != null and _player.has_method("set_inventory_open"):
 		_player.call("set_inventory_open", is_open)
 
@@ -441,11 +448,33 @@ func set_inventory_open(is_open: bool) -> void:
 	else:
 		_cancel_drag()
 		_hide_detail_panel()
+		_external_inventory_visible = false
 		_set_inventory_camera(false)
 
 
 func is_inventory_open() -> bool:
 	return _is_open
+
+
+func open_external_inventory() -> void:
+	_external_inventory_visible = true
+	if not _is_open:
+		set_inventory_open(true)
+	else:
+		_layout_realtime_inventory()
+
+
+func close_external_inventory() -> void:
+	_external_inventory_visible = false
+	if _is_open:
+		_layout_realtime_inventory()
+
+
+func set_external_inventory_visible(is_visible: bool) -> void:
+	if is_visible:
+		open_external_inventory()
+	else:
+		close_external_inventory()
 
 
 func _process(_delta: float) -> void:
@@ -465,12 +494,25 @@ func _is_close_event(event: InputEvent) -> bool:
 	return false
 
 
+func _set_crosshair_hidden_for_inventory(is_inventory_open: bool) -> void:
+	if _crosshair == null:
+		return
+
+	if is_inventory_open:
+		_crosshair_was_visible_before_inventory = _crosshair.visible
+		_crosshair.visible = false
+	else:
+		_crosshair.visible = _crosshair_was_visible_before_inventory
+
+
 func _layout_realtime_inventory() -> void:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var has_external_inventory := _external_inventory_visible
 	var external_width := maxf(viewport_size.x * external_panel_width_ratio, external_panel_min_width)
 	var external_height := viewport_size.y - screen_margin * 2.0
 	var external_x := viewport_size.x - external_width - screen_margin
 	if is_instance_valid(_external_panel):
+		_external_panel.visible = has_external_inventory
 		_external_panel.position = Vector2(external_x, screen_margin)
 		_external_panel.size = Vector2(external_width, external_height)
 
@@ -478,13 +520,19 @@ func _layout_realtime_inventory() -> void:
 	panel.size = panel.get_combined_minimum_size()
 	var panel_size := panel.size
 	var scaled_panel_size := panel_size * panel.scale
-	var target_x: float = external_x - screen_column_gap - scaled_panel_size.x
+	var gear_width := gear_panel_normal_width
+	var content_left := screen_margin + gear_width + screen_column_gap
+	var content_right := external_x - screen_column_gap if has_external_inventory else viewport_size.x - screen_margin
+	var target_x: float = content_left + maxf((content_right - content_left - scaled_panel_size.x) * 0.5, 0.0)
+	if has_external_inventory:
+		target_x = external_x - screen_column_gap - scaled_panel_size.x
 	var target_y: float = (viewport_size.y - scaled_panel_size.y) * 0.5
 	panel.position = Vector2(maxf(target_x, screen_margin), maxf(target_y, screen_margin))
 
 	if is_instance_valid(_gear_panel):
 		var gear_x := screen_margin
-		var gear_width := maxf(gear_panel_min_width, panel.position.x - screen_column_gap - gear_x)
+		if has_external_inventory:
+			gear_width = maxf(gear_panel_min_width, panel.position.x - screen_column_gap - gear_x)
 		_gear_panel.position = Vector2(gear_x, screen_margin)
 		_gear_panel.size = Vector2(gear_width, viewport_size.y - screen_margin * 2.0)
 
