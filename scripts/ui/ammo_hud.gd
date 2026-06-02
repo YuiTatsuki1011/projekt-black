@@ -237,14 +237,15 @@ func _create_magazine_slot(magazine: Dictionary, loading_entry_id: int, loading_
 	))
 	slot.add_child(icon)
 
-	var fill := ColorRect.new()
-	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fill.color = Color(0.8, 0.08, 0.06, 0.58) if is_empty else Color(0.28, 0.68, 0.78, 0.86)
-	fill.anchor_left = 0.18
-	fill.anchor_right = 0.82
-	fill.anchor_bottom = 0.88
-	fill.anchor_top = 0.16 if is_empty else 0.88 - 0.72 * (float(ammo_count) / float(capacity))
-	icon.add_child(fill)
+	if not is_empty:
+		var fill := ColorRect.new()
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		fill.color = Color(0.28, 0.68, 0.78, 0.86)
+		fill.anchor_left = 0.18
+		fill.anchor_right = 0.82
+		fill.anchor_bottom = 0.88
+		fill.anchor_top = 0.88 - 0.72 * (float(ammo_count) / float(capacity))
+		icon.add_child(fill)
 
 	if entry_id == loading_entry_id:
 		var indicator := MAGAZINE_LOAD_INDICATOR_SCRIPT.new() as Control

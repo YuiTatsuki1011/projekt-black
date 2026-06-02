@@ -16,6 +16,7 @@ const ENEMY_COLLISION_MASK: int = 8
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
 const DROPPED_ITEM_SCENE := preload("res://scenes/interaction/dropped_item.tscn")
 const ACTIVE_MAGAZINE_STATUS_ENTRY_ID := -10001
+const INTERACTION_HIGHLIGHT_NAME := "InteractionHighlight"
 
 enum MeleeState {
 	READY,
@@ -110,6 +111,7 @@ var _is_inventory_open: bool = false
 var _facing: int = 1
 var _recoil: float = 0.0
 var _nearby_interactables: Array[Node2D] = []
+var _highlighted_interactables: Array[Node2D] = []
 var _damage_flash_tween: Tween
 var _damage_knockback_velocity: Vector2 = Vector2.ZERO
 var _stamina_recovery_delay_remaining: float = 0.0
@@ -433,6 +435,7 @@ func _physics_process(delta: float) -> void:
 
 	_update_timers(delta)
 	_update_stamina(delta)
+	_update_interaction_highlights()
 	_handle_actions()
 	_update_melee(delta)
 	_update_dodge(delta)
@@ -1621,23 +1624,16 @@ func _try_apply_close_barrel_hit() -> bool:
 func _interact_with_nearest() -> void:
 	_refresh_nearby_interactables()
 
-	var nearest: Node2D = null
-	var nearest_distance_squared: float = INF
-
-	for interactable in _nearby_interactables:
-		if not is_instance_valid(interactable):
-			continue
-
-		var distance_squared: float = global_position.distance_squared_to(interactable.global_position)
-		if distance_squared < nearest_distance_squared:
-			nearest = interactable
-			nearest_distance_squared = distance_squared
+	var nearest: Node2D = _get_preferred_interactable()
 
 	if nearest != null and nearest.has_method("interact"):
 		nearest.call("interact", self)
 
 
 func _refresh_nearby_interactables() -> void:
+	_nearby_interactables = _nearby_interactables.filter(func(interactable: Node2D) -> bool:
+		return is_instance_valid(interactable)
+	)
 	for area in interaction_area.get_overlapping_areas():
 		if area.has_method("interact") and area not in _nearby_interactables:
 			_nearby_interactables.append(area)
@@ -1650,6 +1646,162 @@ func _on_interaction_area_entered(area: Area2D) -> void:
 
 func _on_interaction_area_exited(area: Area2D) -> void:
 	_nearby_interactables.erase(area)
+	_set_interactable_highlight(area, false)
+	_highlighted_interactables.erase(area)
+
+
+func _get_preferred_interactable() -> Node2D:
+	return _get_preferred_interactable_at(get_global_mouse_position())
+
+
+func _get_preferred_interactable_at(mouse_position: Vector2) -> Node2D:
+	var hovered: Node2D = _get_hovered_interactable_at(mouse_position)
+	if hovered != null:
+		return hovered
+
+	var nearest: Node2D = null
+	var nearest_distance_squared: float = INF
+	for interactable in _nearby_interactables:
+		if not is_instance_valid(interactable):
+			continue
+
+		var distance_squared: float = global_position.distance_squared_to(interactable.global_position)
+		if distance_squared < nearest_distance_squared:
+			nearest = interactable
+			nearest_distance_squared = distance_squared
+
+	return nearest
+
+
+func _get_hovered_interactable() -> Node2D:
+	return _get_hovered_interactable_at(get_global_mouse_position())
+
+
+func _get_hovered_interactable_at(mouse_position: Vector2) -> Node2D:
+	var hovered: Node2D = null
+	var hovered_distance_squared: float = INF
+	for interactable in _nearby_interactables:
+		if not is_instance_valid(interactable):
+			continue
+		if not _is_mouse_over_interactable(interactable, mouse_position):
+			continue
+
+		var distance_squared := mouse_position.distance_squared_to(interactable.global_position)
+		if distance_squared < hovered_distance_squared:
+			hovered = interactable
+			hovered_distance_squared = distance_squared
+
+	return hovered
+
+
+func _update_interaction_highlights() -> void:
+	_refresh_nearby_interactables()
+
+	var hovered := _get_hovered_interactable_at(get_global_mouse_position())
+	var active_interactables: Array[Node2D] = []
+	if not _is_inventory_open:
+		for interactable in _nearby_interactables:
+			if is_instance_valid(interactable):
+				active_interactables.append(interactable)
+
+	for interactable in _highlighted_interactables.duplicate():
+		if not is_instance_valid(interactable) or interactable not in active_interactables:
+			if is_instance_valid(interactable):
+				_set_interactable_highlight(interactable, false)
+			_highlighted_interactables.erase(interactable)
+
+	for interactable in active_interactables:
+		_set_interactable_highlight(interactable, true, interactable == hovered)
+		if interactable not in _highlighted_interactables:
+			_highlighted_interactables.append(interactable)
+
+
+func _is_mouse_over_interactable(interactable: Node2D, mouse_position: Vector2) -> bool:
+	if interactable == null or not is_instance_valid(interactable):
+		return false
+
+	for child in interactable.get_children():
+		var collision_shape := child as CollisionShape2D
+		if collision_shape == null or collision_shape.disabled or collision_shape.shape == null:
+			continue
+		if _is_point_inside_collision_shape(collision_shape, mouse_position):
+			return true
+
+	return false
+
+
+func _is_point_inside_collision_shape(collision_shape: CollisionShape2D, global_point: Vector2) -> bool:
+	var local_point: Vector2 = collision_shape.global_transform.affine_inverse() * global_point
+	var shape := collision_shape.shape
+	if shape is RectangleShape2D:
+		var rectangle := shape as RectangleShape2D
+		var half_size := rectangle.size * 0.5
+		return absf(local_point.x) <= half_size.x and absf(local_point.y) <= half_size.y
+	if shape is CircleShape2D:
+		var circle := shape as CircleShape2D
+		return local_point.length_squared() <= circle.radius * circle.radius
+
+	return false
+
+
+func _set_interactable_highlight(interactable: Node2D, is_visible: bool, is_hovered: bool = false) -> void:
+	if interactable == null or not is_instance_valid(interactable):
+		return
+
+	var highlight := interactable.get_node_or_null(INTERACTION_HIGHLIGHT_NAME) as Line2D
+	if highlight == null and is_visible:
+		highlight = _create_interaction_highlight(interactable)
+		if highlight != null:
+			interactable.add_child(highlight)
+	if highlight == null:
+		return
+
+	highlight.visible = is_visible
+	highlight.width = 3.0 if is_hovered else 2.0
+	highlight.default_color = Color(1.0, 1.0, 1.0, 1.0 if is_hovered else 0.78)
+
+
+func _create_interaction_highlight(interactable: Node2D) -> Line2D:
+	var points := _get_interactable_outline_points(interactable)
+	if points.is_empty():
+		return null
+
+	var highlight := Line2D.new()
+	highlight.name = INTERACTION_HIGHLIGHT_NAME
+	highlight.z_index = 50
+	highlight.closed = true
+	highlight.joint_mode = Line2D.LINE_JOINT_SHARP
+	highlight.begin_cap_mode = Line2D.LINE_CAP_NONE
+	highlight.end_cap_mode = Line2D.LINE_CAP_NONE
+	highlight.points = points
+	highlight.visible = false
+	return highlight
+
+
+func _get_interactable_outline_points(interactable: Node2D) -> PackedVector2Array:
+	for child in interactable.get_children():
+		var collision_shape := child as CollisionShape2D
+		if collision_shape == null or collision_shape.shape == null:
+			continue
+		if collision_shape.shape is RectangleShape2D:
+			var rectangle := collision_shape.shape as RectangleShape2D
+			var half_size := rectangle.size * 0.5 + Vector2(4.0, 4.0)
+			return PackedVector2Array([
+				collision_shape.transform * Vector2(-half_size.x, -half_size.y),
+				collision_shape.transform * Vector2(half_size.x, -half_size.y),
+				collision_shape.transform * Vector2(half_size.x, half_size.y),
+				collision_shape.transform * Vector2(-half_size.x, half_size.y),
+			])
+		if collision_shape.shape is CircleShape2D:
+			var circle := collision_shape.shape as CircleShape2D
+			var radius := circle.radius + 4.0
+			var points := PackedVector2Array()
+			for index in 24:
+				var angle := TAU * float(index) / 24.0
+				points.append(collision_shape.transform * (Vector2(cos(angle), sin(angle)) * radius))
+			return points
+
+	return PackedVector2Array()
 
 
 func _on_died() -> void:
