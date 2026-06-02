@@ -33,6 +33,8 @@ const DRAG_SOURCE_NONE := &""
 const DRAG_SOURCE_INVENTORY := &"inventory"
 const DRAG_SOURCE_EQUIPMENT := &"equipment"
 const DRAG_SOURCE_EXTERNAL := &"external"
+const DRAG_SOURCE_SPLIT_INVENTORY := &"split_inventory"
+const DRAG_SOURCE_SPLIT_EXTERNAL := &"split_external"
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
 
 @export var player_path: NodePath = NodePath("../Player")
@@ -793,7 +795,13 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 	if event is InputEventMouseButton:
 		var mouse_button := event as InputEventMouseButton
 		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
-			_begin_drag(entry_id)
+			if not mouse_button.ctrl_pressed or not _begin_split_drag(
+				_inventory,
+				entry_id,
+				_item_nodes.get(entry_id) as Control,
+				DRAG_SOURCE_SPLIT_INVENTORY
+			):
+				_begin_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
 			if mouse_button.ctrl_pressed:
@@ -809,7 +817,13 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 	if event is InputEventMouseButton:
 		var mouse_button := event as InputEventMouseButton
 		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
-			_begin_external_drag(entry_id)
+			if not mouse_button.ctrl_pressed or not _begin_split_drag(
+				_external_inventory,
+				entry_id,
+				_external_item_nodes.get(entry_id) as Control,
+				DRAG_SOURCE_SPLIT_EXTERNAL
+			):
+				_begin_external_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
 			if mouse_button.ctrl_pressed:
@@ -871,6 +885,58 @@ func _begin_external_drag(entry_id: int) -> void:
 	_refresh_external_inventory()
 
 
+func _begin_split_drag(
+	source_inventory: Node,
+	entry_id: int,
+	item_node: Control,
+	split_drag_source: StringName
+) -> bool:
+	if source_inventory == null or item_node == null:
+		return false
+	if not _can_split_stack_entry(source_inventory, entry_id):
+		return false
+
+	var entry: Dictionary = source_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
+	var quantity: int = int(entry.get("quantity", 1))
+	var split_quantity := clampi(floori(float(quantity) * 0.5), 1, quantity - 1)
+	var definition: Dictionary = _get_item_definition_for_inventory(source_inventory, item_id)
+	var local_mouse_position: Vector2 = item_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+
+	_hide_detail_panel()
+	_hide_context_menu()
+	_hide_split_dialog()
+	_drag_source = split_drag_source
+	_drag_entry_id = entry_id
+	_drag_equipment_slot = &""
+	_drag_item_id = item_id
+	_drag_item_size = entry_size
+	_drag_item_quantity = split_quantity
+	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
+	_drag_cell_offset = Vector2i(
+		clampi(floori(local_mouse_position.x / CELL_PITCH), 0, entry_size.x - 1),
+		clampi(floori(local_mouse_position.y / CELL_PITCH), 0, entry_size.y - 1)
+	)
+
+	_equipment_drag_node = _create_item_panel(definition, split_quantity, entry_size, true)
+	_equipment_drag_node.z_index = 30
+	_equipment_drag_node.global_position = item_node.global_position
+	root.add_child(_equipment_drag_node)
+
+	var removed_quantity: int = source_inventory.remove_quantity_from_entry(entry_id, split_quantity)
+	if removed_quantity != split_quantity:
+		_drag_item_quantity = 0
+		_cancel_drag()
+		return false
+
+	_update_drag_visual()
+	return true
+
+
 func _update_drag_visual() -> void:
 	if not _is_dragging():
 		return
@@ -926,6 +992,8 @@ func _finish_drag() -> void:
 				_external_inventory.move_entry(_drag_entry_id, external_target_cell, _drag_item_size)
 		elif not _is_mouse_inside_any_inventory_frame():
 			_drop_dragged_external_entry_to_world()
+	elif _is_split_drag_source():
+		_finish_split_drag(target_cell, external_target_cell)
 	elif _drag_source == DRAG_SOURCE_EQUIPMENT:
 		if target_slot != &"":
 			_move_equipped_slot_to_slot(_drag_equipment_slot, target_slot)
@@ -939,6 +1007,9 @@ func _finish_drag() -> void:
 
 
 func _cancel_drag() -> void:
+	if _is_split_drag_source() and _drag_item_quantity > 0:
+		_return_split_drag_to_source()
+
 	if is_instance_valid(_equipment_drag_node):
 		_equipment_drag_node.queue_free()
 
@@ -965,6 +1036,8 @@ func _get_drag_node() -> Control:
 		return _item_nodes[_drag_entry_id] as Control
 	if _drag_source == DRAG_SOURCE_EXTERNAL and _external_item_nodes.has(_drag_entry_id):
 		return _external_item_nodes[_drag_entry_id] as Control
+	if _is_split_drag_source() and is_instance_valid(_equipment_drag_node):
+		return _equipment_drag_node
 	if _drag_source == DRAG_SOURCE_EQUIPMENT and is_instance_valid(_equipment_drag_node):
 		return _equipment_drag_node
 
@@ -1185,6 +1258,105 @@ func _drop_dragged_external_entry_to_world() -> bool:
 		return false
 
 	return _drop_item_to_world(dropped_entry.get("item_id", &""), int(dropped_entry.get("quantity", 1)))
+
+
+func _finish_split_drag(target_cell: Vector2i, external_target_cell: Vector2i) -> bool:
+	if _drag_item_id == &"" or _drag_item_quantity <= 0:
+		return false
+
+	var did_place := false
+	if _is_mouse_inside_grid():
+		did_place = _place_split_drag_in_inventory(_inventory, target_cell)
+	elif _is_mouse_inside_external_grid() and _external_inventory != null:
+		did_place = _place_split_drag_in_inventory(_external_inventory, external_target_cell)
+	elif not _is_mouse_inside_any_inventory_frame():
+		if _drop_item_to_world(_drag_item_id, _drag_item_quantity):
+			_drag_item_quantity = 0
+			did_place = true
+
+	if not did_place:
+		_show_warning("NO SPACE")
+
+	return did_place
+
+
+func _place_split_drag_in_inventory(target_inventory: Node, target_cell: Vector2i) -> bool:
+	if target_inventory == null or _drag_item_quantity <= 0:
+		return false
+
+	var target_stack_id: int = -1
+	if target_inventory.has_method("get_stack_target_entry_id"):
+		target_stack_id = int(target_inventory.call(
+			"get_stack_target_entry_id",
+			_drag_item_id,
+			target_cell,
+			_drag_item_size,
+			-1
+		))
+
+	if target_stack_id >= 0 and target_inventory.has_method("add_quantity_to_entry"):
+		var moved_quantity: int = int(target_inventory.call(
+			"add_quantity_to_entry",
+			target_stack_id,
+			_drag_item_quantity
+		))
+		if moved_quantity > 0:
+			_drag_item_quantity -= moved_quantity
+			return true
+
+	if not target_inventory.has_method("add_item_at"):
+		return false
+
+	var added_quantity: int = int(target_inventory.call(
+		"add_item_at",
+		_drag_item_id,
+		_drag_item_quantity,
+		target_cell,
+		_drag_item_size
+	))
+	if added_quantity <= 0:
+		return false
+
+	_drag_item_quantity -= added_quantity
+	return true
+
+
+func _return_split_drag_to_source() -> void:
+	var source_inventory := _get_split_drag_source_inventory()
+	if source_inventory == null or _drag_item_id == &"" or _drag_item_quantity <= 0:
+		return
+
+	var remaining_quantity := _drag_item_quantity
+	if _drag_entry_id >= 0 and source_inventory.has_method("add_quantity_to_entry"):
+		var restored_quantity: int = int(source_inventory.call(
+			"add_quantity_to_entry",
+			_drag_entry_id,
+			remaining_quantity
+		))
+		remaining_quantity -= restored_quantity
+
+	if remaining_quantity > 0:
+		remaining_quantity -= _add_entry_to_inventory(
+			source_inventory,
+			_drag_item_id,
+			remaining_quantity,
+			_drag_item_size
+		)
+
+	_drag_item_quantity = maxi(remaining_quantity, 0)
+
+
+func _is_split_drag_source() -> bool:
+	return _drag_source == DRAG_SOURCE_SPLIT_INVENTORY or _drag_source == DRAG_SOURCE_SPLIT_EXTERNAL
+
+
+func _get_split_drag_source_inventory() -> Node:
+	if _drag_source == DRAG_SOURCE_SPLIT_INVENTORY:
+		return _inventory
+	if _drag_source == DRAG_SOURCE_SPLIT_EXTERNAL:
+		return _external_inventory
+
+	return null
 
 
 func _transfer_entry_between_inventories(
@@ -2092,6 +2264,8 @@ func _get_drag_inventory() -> Node:
 		return _external_inventory
 	if _drag_source == DRAG_SOURCE_INVENTORY:
 		return _inventory
+	if _is_split_drag_source():
+		return _get_split_drag_source_inventory()
 
 	return _inventory
 
