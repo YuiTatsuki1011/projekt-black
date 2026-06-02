@@ -1,0 +1,56 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/interaction/item_container.gd" id="1_item_container"]
+[ext_resource type="Script" path="res://scripts/inventory/inventory.gd" id="2_inventory"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_item_container"]
+size = Vector2(74, 34)
+
+[node name="ItemContainer" type="Area2D"]
+collision_layer = 16
+collision_mask = 0
+script = ExtResource("1_item_container")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_item_container")
+
+[node name="Base" type="Polygon2D" parent="."]
+color = Color(0.13, 0.12, 0.105, 1)
+polygon = PackedVector2Array(-37, -17, 37, -17, 37, 17, -37, 17)
+
+[node name="Lid" type="Polygon2D" parent="."]
+position = Vector2(0, -7)
+color = Color(0.24, 0.22, 0.18, 1)
+polygon = PackedVector2Array(-31, -7, 31, -7, 35, 7, -35, 7)
+
+[node name="Latch" type="Polygon2D" parent="."]
+position = Vector2(0, 2)
+color = Color(0.36, 0.32, 0.18, 1)
+polygon = PackedVector2Array(-5, -5, 5, -5, 5, 5, -5, 5)
+
+[node name="Label" type="Label" parent="."]
+offset_left = -58.0
+offset_top = -42.0
+offset_right = 58.0
+offset_bottom = -22.0
+theme_override_font_sizes/font_size = 10
+text = "LOOT BOX"
+horizontal_alignment = 1
+
+[node name="Prompt" type="Label" parent="."]
+offset_left = -20.0
+offset_top = 20.0
+offset_right = 20.0
+offset_bottom = 36.0
+theme_override_font_sizes/font_size = 9
+text = "F"
+horizontal_alignment = 1
+
+[node name="Inventory" type="Node" parent="."]
+script = ExtResource("2_inventory")
+grid_width = 10
+grid_height = 3
+starting_items = {
+"heavy_pistol": 1,
+"pistol_ammo": 24
+}

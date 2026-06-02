@@ -29,6 +29,7 @@ const WORKSPACE_MUTED_COLOR := Color(0.62, 0.66, 0.7, 1.0)
 const DRAG_SOURCE_NONE := &""
 const DRAG_SOURCE_INVENTORY := &"inventory"
 const DRAG_SOURCE_EQUIPMENT := &"equipment"
+const DRAG_SOURCE_EXTERNAL := &"external"
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
 
 @export var player_path: NodePath = NodePath("../Player")
@@ -61,7 +62,10 @@ var _player: Node2D
 var _crosshair: CanvasItem
 var _inventory: Node
 var _equipment: Node
+var _external_inventory: Node
+var _external_container: Node
 var _item_nodes: Dictionary = {}
+var _external_item_nodes: Dictionary = {}
 var _equipment_slot_nodes: Dictionary = {}
 var _drag_source: StringName = DRAG_SOURCE_NONE
 var _drag_entry_id: int = -1
@@ -90,8 +94,14 @@ var _damage_edge_flash: ColorRect
 var _damage_flash_tween: Tween
 var _gear_panel: Panel
 var _external_panel: Panel
+var _external_title_label: Label
+var _external_grid_root: Control
+var _external_cells_root: Control
+var _external_placement_root: Control
+var _external_items_root: Control
 var _status_value_labels: Dictionary = {}
 var _external_inventory_visible: bool = false
+var _external_container_label: String = "CONTAINER"
 var _crosshair_was_visible_before_inventory: bool = true
 
 
@@ -189,8 +199,8 @@ func _setup_workspace_layout() -> void:
 	external_rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	external_rows.add_theme_constant_override("separation", 10)
 	external_margin.add_child(external_rows)
-	_add_section_title(external_rows, "CONTAINER")
-	external_rows.add_child(_create_external_grid_placeholder())
+	_external_title_label = _add_section_title(external_rows, "CONTAINER")
+	external_rows.add_child(_create_external_grid_view())
 
 
 func _create_workspace_panel(panel_name: String) -> Panel:
@@ -217,7 +227,7 @@ func _create_margin_container(left: int, top: int, right: int, bottom: int) -> M
 	return margin
 
 
-func _add_section_title(parent: Node, text: String) -> void:
+func _add_section_title(parent: Node, text: String) -> Label:
 	var label := Label.new()
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.text = text
@@ -227,6 +237,7 @@ func _add_section_title(parent: Node, text: String) -> void:
 	label.add_theme_constant_override("shadow_offset_x", 1)
 	label.add_theme_constant_override("shadow_offset_y", 1)
 	parent.add_child(label)
+	return label
 
 
 func _move_equipment_root_to(parent: Node) -> void:
@@ -290,36 +301,27 @@ func _add_status_card(parent: Node, key: StringName, title: String, value: Strin
 	_status_value_labels[key] = value_label
 
 
-func _create_external_grid_placeholder() -> Control:
+func _create_external_grid_view() -> Control:
 	var holder := Control.new()
-	holder.name = "ExternalGridPlaceholder"
-	holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.name = "ExternalGridRoot"
+	holder.mouse_filter = Control.MOUSE_FILTER_STOP
 	holder.custom_minimum_size = Vector2(0, 174)
+	_external_grid_root = holder
 
-	var placeholder_label := Label.new()
-	placeholder_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	placeholder_label.text = "ITEM CONTAINER"
-	placeholder_label.modulate = WORKSPACE_MUTED_COLOR
-	placeholder_label.add_theme_font_size_override("font_size", 13)
-	placeholder_label.position = Vector2(12, 10)
-	holder.add_child(placeholder_label)
+	_external_cells_root = Control.new()
+	_external_cells_root.name = "ExternalCellsRoot"
+	_external_cells_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(_external_cells_root)
 
-	var columns := 10
-	var rows := 3
-	var cell := 48
-	var gap := 2
-	for y in rows:
-		for x in columns:
-			var grid_cell := Panel.new()
-			grid_cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
-			grid_cell.position = Vector2(x * (cell + gap), 42 + y * (cell + gap))
-			grid_cell.size = Vector2(cell, cell)
-			grid_cell.add_theme_stylebox_override("panel", _make_flat_style(
-				Color(0.12, 0.125, 0.135, 0.68),
-				Color(0.3, 0.32, 0.35, 0.75),
-				1
-			))
-			holder.add_child(grid_cell)
+	_external_placement_root = Control.new()
+	_external_placement_root.name = "ExternalPlacementRoot"
+	_external_placement_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(_external_placement_root)
+
+	_external_items_root = Control.new()
+	_external_items_root.name = "ExternalItemsRoot"
+	_external_items_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	holder.add_child(_external_items_root)
 
 	return holder
 
@@ -371,7 +373,7 @@ func set_inventory_open(is_open: bool) -> void:
 	else:
 		_cancel_drag()
 		_hide_detail_panel()
-		_external_inventory_visible = false
+		_clear_external_container()
 		_set_inventory_camera(false)
 
 
@@ -379,16 +381,18 @@ func is_inventory_open() -> bool:
 	return _is_open
 
 
-func open_external_inventory() -> void:
+func open_external_inventory(container: Node = null) -> void:
+	_set_external_container(container)
 	_external_inventory_visible = true
 	if not _is_open:
 		set_inventory_open(true)
 	else:
 		_layout_realtime_inventory()
+		_refresh_external_inventory()
 
 
 func close_external_inventory() -> void:
-	_external_inventory_visible = false
+	_clear_external_container()
 	if _is_open:
 		_layout_realtime_inventory()
 
@@ -398,6 +402,77 @@ func set_external_inventory_visible(is_visible: bool) -> void:
 		open_external_inventory()
 	else:
 		close_external_inventory()
+
+
+func _set_external_container(container: Node) -> void:
+	_disconnect_external_inventory()
+	_external_container = container
+	_external_inventory = _resolve_external_inventory(container)
+	_external_container_label = _resolve_external_container_label(container)
+	if _external_title_label != null:
+		_external_title_label.text = _external_container_label
+
+	if _external_inventory != null and _external_inventory.has_signal("grid_changed"):
+		var refresh_callable := Callable(self, "_refresh_external_inventory")
+		if not _external_inventory.grid_changed.is_connected(refresh_callable):
+			_external_inventory.grid_changed.connect(refresh_callable)
+
+	_build_external_grid_cells()
+	_refresh_external_inventory()
+
+
+func _clear_external_container() -> void:
+	_disconnect_external_inventory()
+	_external_inventory_visible = false
+	_external_inventory = null
+	_external_container = null
+	_external_container_label = "CONTAINER"
+	if _external_title_label != null:
+		_external_title_label.text = _external_container_label
+	_clear_children(_external_items_root)
+	_external_item_nodes.clear()
+	_clear_children(_external_cells_root)
+	_clear_children(_external_placement_root)
+
+
+func _disconnect_external_inventory() -> void:
+	if _external_inventory == null or not _external_inventory.has_signal("grid_changed"):
+		return
+
+	var refresh_callable := Callable(self, "_refresh_external_inventory")
+	if _external_inventory.grid_changed.is_connected(refresh_callable):
+		_external_inventory.grid_changed.disconnect(refresh_callable)
+
+
+func _resolve_external_inventory(container: Node) -> Node:
+	if container == null:
+		return null
+
+	if container.has_method("get_inventory"):
+		return container.call("get_inventory") as Node
+
+	var inventory_node := container.get_node_or_null("Inventory")
+	if inventory_node != null:
+		return inventory_node
+
+	if container.has_method("get_entries") and container.has_method("get_grid_size"):
+		return container
+
+	return null
+
+
+func _resolve_external_container_label(container: Node) -> String:
+	if container == null:
+		return "CONTAINER"
+
+	if container.has_method("get_container_label"):
+		return str(container.call("get_container_label"))
+
+	var label_value: Variant = container.get("container_label")
+	if label_value != null:
+		return str(label_value)
+
+	return "CONTAINER"
 
 
 func _process(_delta: float) -> void:
@@ -547,6 +622,36 @@ func _build_grid_cells() -> void:
 			cells_root.add_child(cell)
 
 
+func _build_external_grid_cells() -> void:
+	if _external_grid_root == null:
+		return
+
+	_clear_children(_external_cells_root)
+
+	var grid_size := Vector2i(10, 3)
+	if _external_inventory != null and _external_inventory.has_method("get_grid_size"):
+		grid_size = _external_inventory.get_grid_size()
+
+	var grid_pixel_size := Vector2(
+		grid_size.x * CELL_PITCH - CELL_GAP,
+		grid_size.y * CELL_PITCH - CELL_GAP
+	)
+	_external_grid_root.custom_minimum_size = grid_pixel_size
+	_external_grid_root.size = grid_pixel_size
+	_external_cells_root.size = grid_pixel_size
+	_external_placement_root.size = grid_pixel_size
+	_external_items_root.size = grid_pixel_size
+
+	for y in grid_size.y:
+		for x in grid_size.x:
+			var cell := Panel.new()
+			cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			cell.position = _grid_to_local(Vector2i(x, y))
+			cell.size = Vector2(CELL_SIZE, CELL_SIZE)
+			cell.add_theme_stylebox_override("panel", _make_flat_style(CELL_COLOR, CELL_BORDER_COLOR, 1))
+			_external_cells_root.add_child(cell)
+
+
 func _refresh() -> void:
 	if _inventory == null:
 		return
@@ -568,6 +673,9 @@ func _refresh() -> void:
 			_add_item_node(dragged_entry, true)
 			_update_drag_visual()
 
+	if _external_inventory_visible:
+		_refresh_external_inventory()
+
 
 func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	var entry_id: int = int(entry.get("entry_id", -1))
@@ -588,6 +696,50 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 
 	items_root.add_child(item_panel)
 	_item_nodes[entry_id] = item_panel
+
+
+func _refresh_external_inventory() -> void:
+	if _external_items_root == null:
+		return
+
+	_clear_children(_external_items_root)
+	_external_item_nodes.clear()
+	if _external_inventory == null:
+		return
+
+	for entry in _external_inventory.get_entries():
+		var entry_id: int = int(entry.get("entry_id", -1))
+		if entry_id < 0 or (_drag_source == DRAG_SOURCE_EXTERNAL and entry_id == _drag_entry_id):
+			continue
+
+		_add_external_item_node(entry)
+
+	if _drag_source == DRAG_SOURCE_EXTERNAL and _drag_entry_id >= 0:
+		var dragged_entry: Dictionary = _external_inventory.get_entry(_drag_entry_id)
+		if not dragged_entry.is_empty():
+			_add_external_item_node(dragged_entry, true)
+			_update_drag_visual()
+
+
+func _add_external_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
+	var entry_id: int = int(entry.get("entry_id", -1))
+	var item_id: StringName = entry.get("item_id", &"")
+	var position: Vector2i = entry.get("position", Vector2i.ZERO)
+	var size: Vector2i = entry.get("size", Vector2i.ONE)
+	var quantity: int = int(entry.get("quantity", 1))
+	var definition: Dictionary = _get_item_definition_for_inventory(_external_inventory, item_id)
+	var display_size := _drag_item_size if is_dragged else size
+
+	var item_panel := _create_item_panel(definition, quantity, display_size, is_dragged)
+	item_panel.position = _grid_to_local(position)
+	item_panel.z_index = 20 if is_dragged else 5
+	item_panel.gui_input.connect(_on_external_item_gui_input.bind(entry_id))
+	if not is_dragged:
+		item_panel.mouse_entered.connect(_show_external_entry_details.bind(entry_id))
+		item_panel.mouse_exited.connect(_hide_detail_panel)
+
+	_external_items_root.add_child(item_panel)
+	_external_item_nodes[entry_id] = item_panel
 
 
 func _create_item_panel(definition: Dictionary, quantity: int, size: Vector2i, is_dragged: bool = false) -> Panel:
@@ -630,6 +782,14 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			get_viewport().set_input_as_handled()
 
 
+func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
+	if event is InputEventMouseButton:
+		var mouse_button := event as InputEventMouseButton
+		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
+			_begin_external_drag(entry_id)
+			get_viewport().set_input_as_handled()
+
+
 func _begin_drag(entry_id: int) -> void:
 	if _inventory == null or not _item_nodes.has(entry_id):
 		return
@@ -653,6 +813,29 @@ func _begin_drag(entry_id: int) -> void:
 	_refresh()
 
 
+func _begin_external_drag(entry_id: int) -> void:
+	if _external_inventory == null or not _external_item_nodes.has(entry_id):
+		return
+
+	_hide_detail_panel()
+	_drag_source = DRAG_SOURCE_EXTERNAL
+	_drag_entry_id = entry_id
+	_drag_equipment_slot = &""
+	var item_node := _external_item_nodes[entry_id] as Control
+	var entry: Dictionary = _external_inventory.get_entry(entry_id)
+	var entry_size: Vector2i = entry.get("size", Vector2i.ONE)
+	_drag_item_id = entry.get("item_id", &"")
+	_drag_item_size = entry_size
+	_drag_item_quantity = int(entry.get("quantity", 1))
+	var local_mouse_position: Vector2 = item_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
+	_drag_cell_offset = Vector2i(
+		clampi(floori(local_mouse_position.x / CELL_PITCH), 0, entry_size.x - 1),
+		clampi(floori(local_mouse_position.y / CELL_PITCH), 0, entry_size.y - 1)
+	)
+	_refresh_external_inventory()
+
+
 func _update_drag_visual() -> void:
 	if not _is_dragging():
 		return
@@ -674,8 +857,8 @@ func _finish_drag() -> void:
 		_cancel_drag()
 		return
 
-	var target_cell := Vector2i.ZERO
-	target_cell = _get_drag_target_cell()
+	var target_cell := _get_drag_target_cell()
+	var external_target_cell := _get_external_drag_target_cell()
 	var target_slot: StringName = _get_equipment_slot_under_mouse()
 
 	if _drag_source == DRAG_SOURCE_INVENTORY:
@@ -683,17 +866,39 @@ func _finish_drag() -> void:
 			_equip_inventory_entry_to_slot(_drag_entry_id, target_slot)
 		elif _is_mouse_inside_grid():
 			_inventory.move_entry(_drag_entry_id, target_cell, _drag_item_size)
-		elif not _is_mouse_inside_inventory_frame():
+		elif _is_mouse_inside_external_grid() and _external_inventory != null:
+			_transfer_entry_between_inventories(
+				_inventory,
+				_external_inventory,
+				_drag_entry_id,
+				external_target_cell,
+				_drag_item_size
+			)
+		elif not _is_mouse_inside_any_inventory_frame():
 			_drop_dragged_inventory_entry_to_world()
+	elif _drag_source == DRAG_SOURCE_EXTERNAL:
+		if _is_mouse_inside_grid():
+			_transfer_entry_between_inventories(
+				_external_inventory,
+				_inventory,
+				_drag_entry_id,
+				target_cell,
+				_drag_item_size
+			)
+		elif _is_mouse_inside_external_grid() and _external_inventory != null:
+			_external_inventory.move_entry(_drag_entry_id, external_target_cell, _drag_item_size)
+		elif not _is_mouse_inside_any_inventory_frame():
+			_drop_dragged_external_entry_to_world()
 	elif _drag_source == DRAG_SOURCE_EQUIPMENT:
 		if target_slot != &"":
 			_move_equipped_slot_to_slot(_drag_equipment_slot, target_slot)
 		elif _is_mouse_inside_grid():
 			_store_equipped_slot_at(_drag_equipment_slot, target_cell, _drag_item_size)
-		elif not _is_mouse_inside_inventory_frame():
+		elif not _is_mouse_inside_any_inventory_frame():
 			_drop_equipped_slot_to_world(_drag_equipment_slot)
 	_cancel_drag()
 	_refresh()
+	_refresh_external_inventory()
 
 
 func _cancel_drag() -> void:
@@ -721,6 +926,8 @@ func _is_dragging() -> bool:
 func _get_drag_node() -> Control:
 	if _drag_source == DRAG_SOURCE_INVENTORY and _item_nodes.has(_drag_entry_id):
 		return _item_nodes[_drag_entry_id] as Control
+	if _drag_source == DRAG_SOURCE_EXTERNAL and _external_item_nodes.has(_drag_entry_id):
+		return _external_item_nodes[_drag_entry_id] as Control
 	if _drag_source == DRAG_SOURCE_EQUIPMENT and is_instance_valid(_equipment_drag_node):
 		return _equipment_drag_node
 
@@ -762,10 +969,10 @@ func _get_scaled_drag_offset(offset: float, old_size: float, new_size: float) ->
 
 func _refresh_drag_item_node() -> void:
 	var item_node := _get_drag_node()
-	if item_node == null or _inventory == null:
+	if item_node == null:
 		return
 
-	var definition: Dictionary = _inventory.get_item_definition(_drag_item_id)
+	var definition: Dictionary = _get_item_definition_for_inventory(_get_drag_inventory(), _drag_item_id)
 	item_node.size = _entry_pixel_size(_drag_item_size)
 	for child in item_node.get_children():
 		if child is Label:
@@ -783,8 +990,20 @@ func _global_to_grid(global_position: Vector2) -> Vector2i:
 	return Vector2i(floori(local_position.x / CELL_PITCH), floori(local_position.y / CELL_PITCH))
 
 
+func _global_to_external_grid(global_position: Vector2) -> Vector2i:
+	if _external_grid_root == null:
+		return Vector2i(-1, -1)
+
+	var local_position: Vector2 = _external_grid_root.get_global_transform().affine_inverse() * global_position
+	return Vector2i(floori(local_position.x / CELL_PITCH), floori(local_position.y / CELL_PITCH))
+
+
 func _get_drag_target_cell() -> Vector2i:
 	return _global_to_grid(get_viewport().get_mouse_position()) - _drag_cell_offset
+
+
+func _get_external_drag_target_cell() -> Vector2i:
+	return _global_to_external_grid(get_viewport().get_mouse_position()) - _drag_cell_offset
 
 
 func _is_mouse_inside_grid() -> bool:
@@ -793,16 +1012,42 @@ func _is_mouse_inside_grid() -> bool:
 	return Rect2(Vector2.ZERO, grid_size).has_point(local_position)
 
 
+func _is_mouse_inside_external_grid() -> bool:
+	if not _external_inventory_visible or _external_grid_root == null:
+		return false
+
+	var local_position: Vector2 = _external_grid_root.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+	var grid_size: Vector2 = _external_grid_root.custom_minimum_size
+	return Rect2(Vector2.ZERO, grid_size).has_point(local_position)
+
+
 func _is_mouse_inside_inventory_frame() -> bool:
 	var local_position: Vector2 = panel.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
 	return Rect2(Vector2.ZERO, panel.size).has_point(local_position)
+
+
+func _is_mouse_inside_any_inventory_frame() -> bool:
+	if _is_mouse_inside_inventory_frame():
+		return true
+
+	if is_instance_valid(_gear_panel) and _gear_panel.is_visible_in_tree():
+		var gear_position: Vector2 = _gear_panel.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+		if Rect2(Vector2.ZERO, _gear_panel.size).has_point(gear_position):
+			return true
+
+	if is_instance_valid(_external_panel) and _external_panel.is_visible_in_tree():
+		var external_position: Vector2 = _external_panel.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+		if Rect2(Vector2.ZERO, _external_panel.size).has_point(external_position):
+			return true
+
+	return false
 
 
 func _get_equipment_slot_under_mouse() -> StringName:
 	var mouse_position := get_viewport().get_mouse_position()
 	for slot in _equipment_slot_nodes:
 		var slot_node := _equipment_slot_nodes[slot] as Control
-		if slot_node == null:
+		if slot_node == null or not slot_node.is_visible_in_tree():
 			continue
 
 		var local_position: Vector2 = slot_node.get_global_transform().affine_inverse() * mouse_position
@@ -815,7 +1060,18 @@ func _get_equipment_slot_under_mouse() -> StringName:
 func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> void:
 	_clear_placement_markers()
 
-	if not _is_mouse_inside_grid():
+	var target_inventory := _inventory
+	var target_root := placement_root
+	var ignored_entry_id: int = _drag_entry_id if _drag_source == DRAG_SOURCE_INVENTORY else -1
+	if _is_mouse_inside_external_grid():
+		target_cell = _get_external_drag_target_cell()
+		target_inventory = _external_inventory
+		target_root = _external_placement_root
+		ignored_entry_id = _drag_entry_id if _drag_source == DRAG_SOURCE_EXTERNAL else -1
+	elif not _is_mouse_inside_grid():
+		return
+
+	if target_inventory == null or target_root == null:
 		return
 
 	for y in entry_size.y:
@@ -825,9 +1081,8 @@ func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> v
 			marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			marker.position = _grid_to_local(cell)
 			marker.size = Vector2(CELL_SIZE, CELL_SIZE)
-			var ignored_entry_id: int = _drag_entry_id if _drag_source == DRAG_SOURCE_INVENTORY else -1
-			marker.color = PLACEABLE_COLOR if _inventory.is_cell_free(cell, ignored_entry_id) else BLOCKED_COLOR
-			placement_root.add_child(marker)
+			marker.color = PLACEABLE_COLOR if target_inventory.is_cell_free(cell, ignored_entry_id) else BLOCKED_COLOR
+			target_root.add_child(marker)
 			_placement_markers.append(marker)
 
 
@@ -876,6 +1131,55 @@ func _drop_dragged_inventory_entry_to_world() -> bool:
 		return false
 
 	return _drop_item_to_world(dropped_entry.get("item_id", &""), int(dropped_entry.get("quantity", 1)))
+
+
+func _drop_dragged_external_entry_to_world() -> bool:
+	if dropped_item_scene == null or _player == null or _external_inventory == null:
+		return false
+
+	var dropped_entry: Dictionary = _external_inventory.remove_entry(_drag_entry_id)
+	if dropped_entry.is_empty():
+		return false
+
+	return _drop_item_to_world(dropped_entry.get("item_id", &""), int(dropped_entry.get("quantity", 1)))
+
+
+func _transfer_entry_between_inventories(
+	source_inventory: Node,
+	target_inventory: Node,
+	entry_id: int,
+	target_cell: Vector2i,
+	item_size: Vector2i
+) -> bool:
+	if source_inventory == null or target_inventory == null:
+		return false
+
+	if source_inventory == target_inventory:
+		return source_inventory.move_entry(entry_id, target_cell, item_size)
+
+	var entry: Dictionary = source_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var quantity: int = int(entry.get("quantity", 1))
+	var original_cell: Vector2i = entry.get("position", Vector2i.ZERO)
+	var original_size: Vector2i = entry.get("size", Vector2i.ONE)
+
+	var removed_entry: Dictionary = source_inventory.remove_entry(entry_id)
+	if removed_entry.is_empty():
+		return false
+
+	var added_quantity: int = target_inventory.add_item_at(item_id, quantity, target_cell, item_size)
+	if added_quantity == quantity:
+		return true
+
+	if added_quantity > 0:
+		target_inventory.remove_item(item_id, added_quantity)
+
+	source_inventory.add_item_at(item_id, quantity, original_cell, original_size)
+	_show_warning("NO SPACE")
+	return false
 
 
 func _drop_item_to_world(item_id: StringName, quantity: int = 1) -> bool:
@@ -1260,6 +1564,24 @@ func _get_item_type(item_id: StringName) -> StringName:
 	return StringName(definition.get("type", &""))
 
 
+func _get_drag_inventory() -> Node:
+	if _drag_source == DRAG_SOURCE_EXTERNAL:
+		return _external_inventory
+	if _drag_source == DRAG_SOURCE_INVENTORY:
+		return _inventory
+
+	return _inventory
+
+
+func _get_item_definition_for_inventory(source_inventory: Node, item_id: StringName) -> Dictionary:
+	if source_inventory != null and source_inventory.has_method("get_item_definition"):
+		return source_inventory.get_item_definition(item_id)
+	if _inventory != null and _inventory.has_method("get_item_definition"):
+		return _inventory.get_item_definition(item_id)
+
+	return Inventory.get_item_definition_from_directory(item_id)
+
+
 func _load_weapon_resource_for_item(item_id: StringName) -> Resource:
 	if _inventory == null:
 		return null
@@ -1308,6 +1630,24 @@ func _show_entry_details(entry_id: int) -> void:
 		return
 
 	_hover_entry_id = entry_id
+	_hover_equipment_slot = &""
+	_show_item_details(
+		entry.get("item_id", &""),
+		int(entry.get("quantity", 1)),
+		true,
+		entry.get("size", Vector2i.ONE)
+	)
+
+
+func _show_external_entry_details(entry_id: int) -> void:
+	if _is_dragging() or _external_inventory == null:
+		return
+
+	var entry: Dictionary = _external_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return
+
+	_hover_entry_id = -1
 	_hover_equipment_slot = &""
 	_show_item_details(
 		entry.get("item_id", &""),
