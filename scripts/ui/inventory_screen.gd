@@ -38,6 +38,10 @@ const DRAG_SOURCE_EQUIPMENT := &"equipment"
 const DRAG_SOURCE_EXTERNAL := &"external"
 const DRAG_SOURCE_SPLIT_INVENTORY := &"split_inventory"
 const DRAG_SOURCE_SPLIT_EXTERNAL := &"split_external"
+const DRAG_SOURCE_WEAPON_MAGAZINE := &"weapon_magazine"
+const DRAG_SOURCE_WEAPON_CHAMBER := &"weapon_chamber"
+const WEAPON_PART_MAGAZINE := &"magazine"
+const WEAPON_PART_CHAMBER := &"chamber"
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
 
 @export var player_path: NodePath = NodePath("../Player")
@@ -81,8 +85,10 @@ var _drag_equipment_slot: StringName = &""
 var _drag_item_id: StringName = &""
 var _drag_item_size: Vector2i = Vector2i.ONE
 var _drag_item_quantity: int = 1
+var _drag_item_metadata: Dictionary = {}
 var _drag_cell_offset: Vector2i = Vector2i.ZERO
 var _drag_mouse_offset: Vector2 = Vector2.ZERO
+var _drag_weapon_part_slot: StringName = &""
 var _equipment_drag_node: Control
 var _placement_markers: Array[ColorRect] = []
 var _slot_preview: ColorRect
@@ -118,6 +124,10 @@ var _split_dialog_entry_id: int = -1
 var _split_dialog_max_quantity: int = 1
 var _split_dialog_quantity_input: LineEdit
 var _weapon_inspect_window: Control
+var _weapon_inspect_slot_nodes: Dictionary = {}
+var _weapon_inspect_item_id: StringName = &""
+var _weapon_inspect_weapon: Resource
+var _weapon_inspect_equipment_slot: StringName = &""
 
 
 func _ready() -> void:
@@ -855,7 +865,6 @@ func _begin_drag(entry_id: int) -> void:
 	_hide_detail_panel()
 	_hide_context_menu()
 	_hide_split_dialog()
-	_hide_weapon_inspect_window()
 	_drag_source = DRAG_SOURCE_INVENTORY
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
@@ -865,6 +874,7 @@ func _begin_drag(entry_id: int) -> void:
 	_drag_item_id = entry.get("item_id", &"")
 	_drag_item_size = entry_size
 	_drag_item_quantity = int(entry.get("quantity", 1))
+	_drag_item_metadata = entry.get("metadata", {})
 	var local_mouse_position: Vector2 = item_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
 	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
 	_drag_cell_offset = Vector2i(
@@ -881,7 +891,6 @@ func _begin_external_drag(entry_id: int) -> void:
 	_hide_detail_panel()
 	_hide_context_menu()
 	_hide_split_dialog()
-	_hide_weapon_inspect_window()
 	_drag_source = DRAG_SOURCE_EXTERNAL
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
@@ -891,6 +900,7 @@ func _begin_external_drag(entry_id: int) -> void:
 	_drag_item_id = entry.get("item_id", &"")
 	_drag_item_size = entry_size
 	_drag_item_quantity = int(entry.get("quantity", 1))
+	_drag_item_metadata = entry.get("metadata", {})
 	var local_mouse_position: Vector2 = item_node.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
 	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
 	_drag_cell_offset = Vector2i(
@@ -925,13 +935,13 @@ func _begin_split_drag(
 	_hide_detail_panel()
 	_hide_context_menu()
 	_hide_split_dialog()
-	_hide_weapon_inspect_window()
 	_drag_source = split_drag_source
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
 	_drag_item_id = item_id
 	_drag_item_size = entry_size
 	_drag_item_quantity = split_quantity
+	_drag_item_metadata = {}
 	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
 	_drag_cell_offset = Vector2i(
 		clampi(floori(local_mouse_position.x / CELL_PITCH), 0, entry_size.x - 1),
@@ -977,9 +987,12 @@ func _finish_drag() -> void:
 	var target_cell := _get_drag_target_cell()
 	var external_target_cell := _get_external_drag_target_cell()
 	var target_slot: StringName = _get_equipment_slot_under_mouse()
+	var target_weapon_part_slot: StringName = _get_weapon_part_slot_under_mouse()
 
 	if _drag_source == DRAG_SOURCE_INVENTORY:
-		if target_slot != &"":
+		if target_weapon_part_slot != &"":
+			_drop_inventory_entry_to_weapon_part(_inventory, _drag_entry_id, target_weapon_part_slot)
+		elif target_slot != &"":
 			_equip_inventory_entry_to_slot(_drag_entry_id, target_slot)
 		elif _is_mouse_inside_grid():
 			if not _try_stack_entry_at_cell(_inventory, _inventory, _drag_entry_id, target_cell, _drag_item_size):
@@ -995,7 +1008,9 @@ func _finish_drag() -> void:
 		elif not _is_mouse_inside_any_inventory_frame():
 			_drop_dragged_inventory_entry_to_world()
 	elif _drag_source == DRAG_SOURCE_EXTERNAL:
-		if _is_mouse_inside_grid():
+		if target_weapon_part_slot != &"":
+			_drop_inventory_entry_to_weapon_part(_external_inventory, _drag_entry_id, target_weapon_part_slot)
+		elif _is_mouse_inside_grid():
 			_transfer_entry_between_inventories(
 				_external_inventory,
 				_inventory,
@@ -1017,6 +1032,8 @@ func _finish_drag() -> void:
 			_store_equipped_slot_at(_drag_equipment_slot, target_cell, _drag_item_size)
 		elif not _is_mouse_inside_any_inventory_frame():
 			_drop_equipped_slot_to_world(_drag_equipment_slot)
+	elif _is_weapon_part_drag_source():
+		_finish_weapon_part_drag(target_cell, external_target_cell)
 	_cancel_drag()
 	_refresh()
 	_refresh_external_inventory()
@@ -1035,8 +1052,10 @@ func _cancel_drag() -> void:
 	_drag_item_id = &""
 	_drag_item_size = Vector2i.ONE
 	_drag_item_quantity = 1
+	_drag_item_metadata = {}
 	_drag_cell_offset = Vector2i.ZERO
 	_drag_mouse_offset = Vector2.ZERO
+	_drag_weapon_part_slot = &""
 	_equipment_drag_node = null
 	_clear_placement_markers()
 	_clear_slot_preview()
@@ -1055,6 +1074,8 @@ func _get_drag_node() -> Control:
 	if _is_split_drag_source() and is_instance_valid(_equipment_drag_node):
 		return _equipment_drag_node
 	if _drag_source == DRAG_SOURCE_EQUIPMENT and is_instance_valid(_equipment_drag_node):
+		return _equipment_drag_node
+	if _is_weapon_part_drag_source() and is_instance_valid(_equipment_drag_node):
 		return _equipment_drag_node
 
 	return null
@@ -1103,7 +1124,7 @@ func _refresh_drag_item_node() -> void:
 	for child in item_node.get_children():
 		if child is Label:
 			var label := child as Label
-			label.text = _get_item_label(definition, _drag_item_quantity, _drag_item_size)
+			label.text = _get_item_label(definition, _drag_item_quantity, _drag_item_size, _drag_item_metadata)
 			break
 
 
@@ -1166,6 +1187,9 @@ func _is_mouse_inside_any_inventory_frame() -> bool:
 		if Rect2(Vector2.ZERO, _external_panel.size).has_point(external_position):
 			return true
 
+	if _is_mouse_inside_weapon_inspect_window():
+		return true
+
 	return false
 
 
@@ -1181,6 +1205,28 @@ func _get_equipment_slot_under_mouse() -> StringName:
 			return slot
 
 	return &""
+
+
+func _get_weapon_part_slot_under_mouse() -> StringName:
+	var mouse_position := get_viewport().get_mouse_position()
+	for slot_id in _weapon_inspect_slot_nodes:
+		var slot_node := _weapon_inspect_slot_nodes[slot_id] as Control
+		if slot_node == null or not slot_node.is_visible_in_tree():
+			continue
+
+		var local_position: Vector2 = slot_node.get_global_transform().affine_inverse() * mouse_position
+		if Rect2(Vector2.ZERO, slot_node.size).has_point(local_position):
+			return StringName(slot_id)
+
+	return &""
+
+
+func _is_mouse_inside_weapon_inspect_window() -> bool:
+	if not is_instance_valid(_weapon_inspect_window) or not _weapon_inspect_window.is_visible_in_tree():
+		return false
+
+	var local_position: Vector2 = _weapon_inspect_window.get_global_transform().affine_inverse() * get_viewport().get_mouse_position()
+	return Rect2(Vector2.ZERO, _weapon_inspect_window.size).has_point(local_position)
 
 
 func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> void:
@@ -1920,6 +1966,10 @@ func _show_weapon_inspect_window(item_id: StringName, weapon: Resource, equipmen
 
 	_hide_weapon_inspect_window()
 	_hide_detail_panel()
+	_weapon_inspect_item_id = item_id
+	_weapon_inspect_weapon = weapon
+	_weapon_inspect_equipment_slot = equipment_slot
+	_weapon_inspect_slot_nodes.clear()
 
 	var window := Panel.new()
 	window.name = "WeaponInspectWindow"
@@ -2151,7 +2201,12 @@ func _create_weapon_slots_panel(item_id: StringName, weapon: Resource, equipment
 	var item_type: StringName = _get_item_type(item_id)
 	if item_type == &"ranged_weapon":
 		for slot_data in _get_ranged_weapon_part_slots(weapon, equipment_slot):
-			grid.add_child(_create_weapon_part_slot_card(slot_data))
+			var slot_card := _create_weapon_part_slot_card(slot_data)
+			var slot_id: StringName = slot_data.get("slot_id", &"")
+			if slot_id != &"":
+				_weapon_inspect_slot_nodes[slot_id] = slot_card
+				slot_card.gui_input.connect(_on_weapon_part_slot_gui_input.bind(slot_id))
+			grid.add_child(slot_card)
 	else:
 		for slot_data in _get_melee_weapon_part_slots():
 			grid.add_child(_create_weapon_part_slot_card(slot_data))
@@ -2165,30 +2220,37 @@ func _get_ranged_weapon_part_slots(weapon: Resource, equipment_slot: StringName)
 	var magazine_name := str(magazine_definition.get("short_name", magazine_definition.get("name", magazine_id)))
 	var magazine_line := magazine_name
 	if _is_active_firearm_slot(equipment_slot) and _player != null:
-		magazine_line = "%s\n%d/%d" % [
-			magazine_name,
-			int(_player.get("magazine_ammo")),
-			int(_player.get("magazine_size")),
-		]
+		if bool(_player.call("has_active_magazine_inserted")):
+			magazine_line = "%s\n%d/%d" % [
+				magazine_name,
+				int(_player.get("magazine_ammo")),
+				int(_player.get("magazine_size")),
+			]
+		else:
+			magazine_line = "Empty"
 
 	var chamber_line := "Round"
 	if _is_active_firearm_slot(equipment_slot) and _player != null:
-		chamber_line = "%d/%d" % [
-			int(_player.get("chamber_ammo")),
-			int(_player.get("chamber_size")),
-		]
+		var chamber_count := int(_player.get("chamber_ammo"))
+		if chamber_count > 0:
+			chamber_line = "%d/%d" % [
+				chamber_count,
+				int(_player.get("chamber_size")),
+			]
+		else:
+			chamber_line = "Empty"
 
 	return [
-		{"name": "MAGAZINE", "value": magazine_line, "locked": false},
-		{"name": "CHAMBER", "value": chamber_line, "locked": true},
-		{"name": "OPTIC", "value": "Empty", "locked": false},
-		{"name": "MUZZLE", "value": "Empty", "locked": false},
-		{"name": "GRIP", "value": "Empty", "locked": false},
-		{"name": "UNDER", "value": "Empty", "locked": false},
-		{"name": "ACCESSORY", "value": "Empty", "locked": false},
-		{"name": "STOCK", "value": "Empty", "locked": false},
-		{"name": "BARREL", "value": "Fixed", "locked": true},
-		{"name": "RECEIVER", "value": "Fixed", "locked": true},
+		{"slot_id": WEAPON_PART_MAGAZINE, "name": "MAGAZINE", "value": magazine_line, "locked": false},
+		{"slot_id": WEAPON_PART_CHAMBER, "name": "CHAMBER", "value": chamber_line, "locked": true},
+		{"slot_id": &"optic", "name": "OPTIC", "value": "Empty", "locked": false},
+		{"slot_id": &"muzzle", "name": "MUZZLE", "value": "Empty", "locked": false},
+		{"slot_id": &"grip", "name": "GRIP", "value": "Empty", "locked": false},
+		{"slot_id": &"under", "name": "UNDER", "value": "Empty", "locked": false},
+		{"slot_id": &"accessory", "name": "ACCESSORY", "value": "Empty", "locked": false},
+		{"slot_id": &"stock", "name": "STOCK", "value": "Empty", "locked": false},
+		{"slot_id": &"barrel", "name": "BARREL", "value": "Fixed", "locked": true},
+		{"slot_id": &"receiver", "name": "RECEIVER", "value": "Fixed", "locked": true},
 	]
 
 
@@ -2202,7 +2264,7 @@ func _get_melee_weapon_part_slots() -> Array[Dictionary]:
 
 func _create_weapon_part_slot_card(slot_data: Dictionary) -> Control:
 	var card := Panel.new()
-	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.mouse_filter = Control.MOUSE_FILTER_STOP
 	card.custom_minimum_size = Vector2(124, 58)
 	card.add_theme_stylebox_override("panel", _make_flat_style(
 		WEAPON_INSPECT_SLOT_COLOR,
@@ -2237,6 +2299,284 @@ func _create_weapon_part_slot_card(slot_data: Dictionary) -> Control:
 	return card
 
 
+func _on_weapon_part_slot_gui_input(event: InputEvent, slot_id: StringName) -> void:
+	if event is InputEventMouseButton:
+		var mouse_button := event as InputEventMouseButton
+		if mouse_button.button_index != MOUSE_BUTTON_LEFT or not mouse_button.pressed:
+			return
+
+		if not _is_weapon_inspect_active_firearm():
+			_show_warning("EQUIP ONLY")
+			get_viewport().set_input_as_handled()
+			return
+
+		if slot_id == WEAPON_PART_MAGAZINE:
+			_begin_weapon_magazine_drag()
+		elif slot_id == WEAPON_PART_CHAMBER:
+			_begin_weapon_chamber_drag()
+
+		get_viewport().set_input_as_handled()
+
+
+func _is_weapon_inspect_active_firearm() -> bool:
+	return _weapon_inspect_equipment_slot != &"" and _is_active_firearm_slot(_weapon_inspect_equipment_slot)
+
+
+func _begin_weapon_magazine_drag() -> void:
+	if _player == null or _inventory == null:
+		return
+	if not bool(_player.call("has_active_magazine_inserted")):
+		_show_warning("EMPTY")
+		return
+
+	var item_id := StringName(_player.call("get_active_magazine_item_id"))
+	var metadata: Dictionary = _player.call("get_active_magazine_metadata")
+	if item_id == &"":
+		return
+
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	_begin_weapon_part_drag(
+		DRAG_SOURCE_WEAPON_MAGAZINE,
+		WEAPON_PART_MAGAZINE,
+		item_id,
+		1,
+		definition.get("size", Vector2i.ONE),
+		metadata
+	)
+
+
+func _begin_weapon_chamber_drag() -> void:
+	if _player == null or _inventory == null:
+		return
+	if int(_player.get("chamber_ammo")) <= 0:
+		_show_warning("EMPTY")
+		return
+
+	var item_id := StringName(_player.get("ammo_item_id"))
+	if item_id == &"":
+		return
+
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	_begin_weapon_part_drag(
+		DRAG_SOURCE_WEAPON_CHAMBER,
+		WEAPON_PART_CHAMBER,
+		item_id,
+		1,
+		definition.get("size", Vector2i.ONE),
+		{}
+	)
+
+
+func _begin_weapon_part_drag(
+	drag_source: StringName,
+	part_slot: StringName,
+	item_id: StringName,
+	quantity: int,
+	item_size: Vector2i,
+	metadata: Dictionary
+) -> void:
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var drag_size := _entry_pixel_size(item_size)
+
+	_hide_detail_panel()
+	_hide_context_menu()
+	_hide_split_dialog()
+	_drag_source = drag_source
+	_drag_entry_id = -1
+	_drag_equipment_slot = &""
+	_drag_weapon_part_slot = part_slot
+	_drag_item_id = item_id
+	_drag_item_size = item_size
+	_drag_item_quantity = quantity
+	_drag_item_metadata = metadata
+	_drag_cell_offset = Vector2i.ZERO
+	_drag_mouse_offset = drag_size * 0.5
+
+	_equipment_drag_node = _create_item_panel(definition, quantity, item_size, true, metadata)
+	_equipment_drag_node.z_index = 30
+	root.add_child(_equipment_drag_node)
+	_update_drag_visual()
+
+
+func _is_weapon_part_drag_source() -> bool:
+	return _drag_source == DRAG_SOURCE_WEAPON_MAGAZINE or _drag_source == DRAG_SOURCE_WEAPON_CHAMBER
+
+
+func _drop_inventory_entry_to_weapon_part(source_inventory: Node, entry_id: int, slot_id: StringName) -> bool:
+	if source_inventory == null:
+		return false
+	if not _is_weapon_inspect_active_firearm():
+		_show_warning("EQUIP ONLY")
+		return false
+
+	if slot_id == WEAPON_PART_MAGAZINE:
+		return _drop_magazine_entry_to_active_weapon(source_inventory, entry_id)
+	if slot_id == WEAPON_PART_CHAMBER:
+		return _drop_ammo_entry_to_chamber(source_inventory, entry_id)
+
+	_show_warning("WRONG SLOT")
+	return false
+
+
+func _drop_magazine_entry_to_active_weapon(source_inventory: Node, entry_id: int) -> bool:
+	if _player == null or source_inventory == null:
+		return false
+
+	var entry: Dictionary = source_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var metadata: Dictionary = entry.get("metadata", {})
+	if not bool(_player.call("can_insert_active_magazine", item_id, metadata)):
+		_show_warning("WRONG MAG")
+		return false
+
+	var has_previous_magazine := bool(_player.call("has_active_magazine_inserted"))
+	if has_previous_magazine and source_inventory != _inventory and not _inventory.can_add_item(StringName(_player.call("get_active_magazine_item_id")), 1):
+		_show_warning("NO SPACE")
+		return false
+
+	var removed_entry: Dictionary = source_inventory.remove_entry(entry_id)
+	if removed_entry.is_empty():
+		return false
+
+	var previous_magazine: Dictionary = {}
+	if has_previous_magazine:
+		previous_magazine = _player.call("eject_active_magazine")
+		if previous_magazine.is_empty() or not _add_metadata_item_to_inventory(
+			_inventory,
+			previous_magazine.get("item_id", &""),
+			previous_magazine.get("metadata", {})
+		):
+			_restore_removed_entry(source_inventory, removed_entry)
+			if not previous_magazine.is_empty():
+				_player.call("insert_active_magazine", previous_magazine.get("item_id", &""), previous_magazine.get("metadata", {}))
+			_show_warning("NO SPACE")
+			return false
+
+	if not bool(_player.call("insert_active_magazine", item_id, metadata)):
+		_restore_removed_entry(source_inventory, removed_entry)
+		if not previous_magazine.is_empty():
+			_player.call("insert_active_magazine", previous_magazine.get("item_id", &""), previous_magazine.get("metadata", {}))
+		_show_warning("WRONG MAG")
+		return false
+
+	_refresh_weapon_inspect_window()
+	return true
+
+
+func _drop_ammo_entry_to_chamber(source_inventory: Node, entry_id: int) -> bool:
+	if _player == null or source_inventory == null:
+		return false
+
+	var entry: Dictionary = source_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	if not bool(_player.call("can_insert_chamber_round", item_id)):
+		_show_warning("WRONG ROUND")
+		return false
+
+	var removed_quantity: int = source_inventory.remove_quantity_from_entry(entry_id, 1)
+	if removed_quantity != 1:
+		return false
+
+	if not bool(_player.call("insert_chamber_round", item_id)):
+		_add_entry_to_inventory(source_inventory, item_id, 1, entry.get("size", Vector2i.ONE))
+		_show_warning("CHAMBER FULL")
+		return false
+
+	_refresh_weapon_inspect_window()
+	return true
+
+
+func _finish_weapon_part_drag(target_cell: Vector2i, external_target_cell: Vector2i) -> bool:
+	if _drag_item_id == &"" or _drag_item_quantity <= 0:
+		return false
+
+	var did_place := false
+	if _is_mouse_inside_grid():
+		did_place = _place_weapon_part_drag_in_inventory(_inventory, target_cell)
+	elif _is_mouse_inside_external_grid() and _external_inventory != null:
+		did_place = _place_weapon_part_drag_in_inventory(_external_inventory, external_target_cell)
+	elif not _is_mouse_inside_any_inventory_frame():
+		did_place = _drop_item_to_world(_drag_item_id, _drag_item_quantity, _drag_item_metadata)
+
+	if did_place:
+		if _drag_source == DRAG_SOURCE_WEAPON_MAGAZINE:
+			_player.call("eject_active_magazine")
+		elif _drag_source == DRAG_SOURCE_WEAPON_CHAMBER:
+			_player.call("eject_chamber_round")
+		_refresh_weapon_inspect_window()
+	else:
+		_show_warning("NO SPACE")
+
+	return did_place
+
+
+func _place_weapon_part_drag_in_inventory(target_inventory: Node, target_cell: Vector2i) -> bool:
+	if target_inventory == null:
+		return false
+	if _drag_item_metadata.is_empty() and target_inventory.has_method("get_stack_target_entry_id"):
+		var target_stack_id: int = int(target_inventory.call(
+			"get_stack_target_entry_id",
+			_drag_item_id,
+			target_cell,
+			_drag_item_size,
+			-1
+		))
+		if target_stack_id >= 0 and target_inventory.has_method("add_quantity_to_entry"):
+			return int(target_inventory.call("add_quantity_to_entry", target_stack_id, _drag_item_quantity)) == _drag_item_quantity
+
+	if not target_inventory.has_method("add_item_at"):
+		return false
+
+	return int(target_inventory.call(
+		"add_item_at",
+		_drag_item_id,
+		_drag_item_quantity,
+		target_cell,
+		_drag_item_size,
+		_drag_item_metadata
+	)) == _drag_item_quantity
+
+
+func _add_metadata_item_to_inventory(target_inventory: Node, item_id: StringName, metadata: Dictionary) -> bool:
+	if target_inventory == null or item_id == &"":
+		return false
+	if target_inventory.has_method("add_item_with_metadata"):
+		return bool(target_inventory.call("add_item_with_metadata", item_id, metadata))
+	if target_inventory.has_method("add_item"):
+		return int(target_inventory.call("add_item", item_id, 1)) == 1
+
+	return false
+
+
+func _restore_removed_entry(target_inventory: Node, entry: Dictionary) -> bool:
+	if target_inventory == null or entry.is_empty():
+		return false
+	if not target_inventory.has_method("add_item_at"):
+		return false
+
+	return int(target_inventory.call(
+		"add_item_at",
+		entry.get("item_id", &""),
+		int(entry.get("quantity", 1)),
+		entry.get("position", Vector2i.ZERO),
+		entry.get("size", Vector2i.ONE),
+		entry.get("metadata", {})
+	)) == int(entry.get("quantity", 1))
+
+
+func _refresh_weapon_inspect_window() -> void:
+	if not is_instance_valid(_weapon_inspect_window) or _weapon_inspect_weapon == null or _weapon_inspect_item_id == &"":
+		return
+
+	_show_weapon_inspect_window(_weapon_inspect_item_id, _weapon_inspect_weapon, _weapon_inspect_equipment_slot)
+
+
 func _get_weapon_total_capacity(weapon: Resource) -> int:
 	return _get_resource_int(weapon, &"magazine_size") + _get_resource_int(weapon, &"chamber_size")
 
@@ -2245,6 +2585,10 @@ func _hide_weapon_inspect_window() -> void:
 	if is_instance_valid(_weapon_inspect_window):
 		_weapon_inspect_window.queue_free()
 	_weapon_inspect_window = null
+	_weapon_inspect_slot_nodes.clear()
+	_weapon_inspect_item_id = &""
+	_weapon_inspect_weapon = null
+	_weapon_inspect_equipment_slot = &""
 
 
 func _position_weapon_inspect_window(window: Control) -> void:
@@ -2556,7 +2900,6 @@ func _begin_equipment_drag(slot: StringName) -> void:
 	_hide_detail_panel()
 	_hide_context_menu()
 	_hide_split_dialog()
-	_hide_weapon_inspect_window()
 	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
 	if item_id == &"":
 		return

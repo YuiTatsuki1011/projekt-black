@@ -561,6 +561,8 @@ func _try_fire() -> void:
 	if current_ammo <= 0:
 		_start_reload()
 		return
+	if chamber_size > 0 and chamber_ammo <= 0:
+		return
 
 	if projectile_scene == null:
 		return
@@ -985,9 +987,9 @@ func _configure_aim_bones() -> void:
 
 
 func _consume_round() -> void:
-	if chamber_ammo > 0:
+	if chamber_size > 0 and chamber_ammo > 0:
 		chamber_ammo -= 1
-	elif magazine_ammo > 0:
+	elif chamber_size <= 0 and magazine_ammo > 0:
 		magazine_ammo -= 1
 	else:
 		_update_current_ammo_from_loaded_parts()
@@ -1018,6 +1020,84 @@ func _feed_chamber_if_empty() -> void:
 
 func _has_active_magazine_inserted() -> bool:
 	return bool(_firearm_has_magazine_by_slot.get(_active_firearm_slot, magazine_size > 0))
+
+
+func has_active_magazine_inserted() -> bool:
+	return _has_active_magazine_inserted()
+
+
+func get_active_magazine_item_id() -> StringName:
+	return magazine_item_id
+
+
+func get_active_magazine_metadata() -> Dictionary:
+	if not _has_active_magazine_inserted():
+		return {}
+
+	return _make_magazine_metadata(magazine_ammo)
+
+
+func can_insert_active_magazine(item_id: StringName, _metadata: Dictionary = {}) -> bool:
+	return _has_ranged_weapon and item_id != &"" and item_id == magazine_item_id
+
+
+func insert_active_magazine(item_id: StringName, metadata: Dictionary = {}) -> bool:
+	if not can_insert_active_magazine(item_id, metadata):
+		return false
+
+	magazine_ammo = _get_magazine_rounds_from_metadata(metadata, item_id)
+	magazine_item_id = item_id
+	_firearm_has_magazine_by_slot[_active_firearm_slot] = true
+	_feed_chamber_if_empty()
+	_commit_loaded_ammo_change()
+	return true
+
+
+func eject_active_magazine() -> Dictionary:
+	if not _has_active_magazine_inserted():
+		return {}
+
+	var ejected := {
+		"item_id": magazine_item_id,
+		"metadata": _make_magazine_metadata(magazine_ammo),
+	}
+	magazine_ammo = 0
+	_firearm_has_magazine_by_slot[_active_firearm_slot] = false
+	_commit_loaded_ammo_change()
+	return ejected
+
+
+func can_insert_chamber_round(item_id: StringName) -> bool:
+	return _has_ranged_weapon and chamber_size > 0 and chamber_ammo < chamber_size and item_id == ammo_item_id
+
+
+func insert_chamber_round(item_id: StringName) -> bool:
+	if not can_insert_chamber_round(item_id):
+		return false
+
+	chamber_ammo += 1
+	_commit_loaded_ammo_change()
+	return true
+
+
+func eject_chamber_round() -> Dictionary:
+	if not _has_ranged_weapon or chamber_ammo <= 0 or ammo_item_id == &"":
+		return {}
+
+	chamber_ammo -= 1
+	var ejected := {
+		"item_id": ammo_item_id,
+		"quantity": 1,
+	}
+	_commit_loaded_ammo_change()
+	return ejected
+
+
+func _commit_loaded_ammo_change() -> void:
+	_update_current_ammo_from_loaded_parts()
+	_save_active_firearm_ammo()
+	_sync_reserve_ammo(false)
+	ammo_changed.emit(current_ammo, reserve_ammo)
 
 
 func _find_best_reload_magazine_entry_id() -> int:
