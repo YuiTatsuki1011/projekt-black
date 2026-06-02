@@ -27,6 +27,7 @@ enum ShootState {
 @onready var gun_root: Node2D = $GunRoot
 @onready var muzzle: Marker2D = $GunRoot/Muzzle
 @onready var telegraph_line: Line2D = $TelegraphLine
+@onready var loot_dropper: Node = get_node_or_null("LootDropper")
 
 var _gravity: float = 980.0
 var _target: Node2D
@@ -220,6 +221,7 @@ func _on_died() -> void:
 	collision_mask = 0
 	_set_telegraph_visible(false)
 	_spawn_vfx(death_vfx_scene, global_position + Vector2(0, -22))
+	_drop_loot()
 	queue_free()
 
 
@@ -246,3 +248,10 @@ func _spawn_vfx(vfx_scene: PackedScene, spawn_position: Vector2) -> void:
 	if vfx is Node2D:
 		var vfx_2d := vfx as Node2D
 		vfx_2d.global_position = spawn_position
+
+
+func _drop_loot() -> void:
+	if loot_dropper == null or not loot_dropper.has_method("drop_at"):
+		return
+
+	loot_dropper.call("drop_at", global_position)

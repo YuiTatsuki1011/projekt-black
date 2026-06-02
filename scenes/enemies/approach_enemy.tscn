@@ -1,10 +1,11 @@
-[gd_scene load_steps=8 format=3]
+[gd_scene load_steps=9 format=3]
 
 [ext_resource type="Script" path="res://scripts/enemies/approach_enemy.gd" id="1_approach_enemy"]
 [ext_resource type="Script" path="res://scripts/combat/health.gd" id="2_health"]
 [ext_resource type="PackedScene" path="res://scenes/ui/health_indicator.tscn" id="3_health_indicator"]
 [ext_resource type="PackedScene" path="res://scenes/vfx/hit_burst.tscn" id="4_hit_burst"]
 [ext_resource type="PackedScene" path="res://scenes/vfx/death_burst.tscn" id="5_death_burst"]
+[ext_resource type="Script" path="res://scripts/enemies/loot_dropper.gd" id="6_loot_dropper"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_body"]
 size = Vector2(22, 38)
@@ -48,3 +49,12 @@ current_health = 40
 
 [node name="HealthIndicator" parent="." instance=ExtResource("3_health_indicator")]
 position = Vector2(0, -52)
+
+[node name="LootDropper" type="Node" parent="."]
+script = ExtResource("6_loot_dropper")
+item_ids = Array[StringName]([&"pistol_ammo"])
+drop_chances = Array[float]([1.0])
+min_quantities = Array[int]([2])
+max_quantities = Array[int]([5])
+drop_offset = Vector2(0, -10)
+spread_radius = 14.0

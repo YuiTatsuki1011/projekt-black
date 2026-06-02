@@ -25,6 +25,7 @@ enum AttackState {
 @onready var body_visual: Polygon2D = $BodyVisual
 @onready var eye_visual: Polygon2D = $BodyVisual/Eye
 @onready var damage_area: Area2D = $DamageArea
+@onready var loot_dropper: Node = get_node_or_null("LootDropper")
 
 var _gravity: float = 980.0
 var _target: Node2D
@@ -211,6 +212,7 @@ func _on_died() -> void:
 	collision_mask = 0
 	damage_area.monitoring = false
 	_spawn_vfx(death_vfx_scene, global_position + Vector2(0, -20))
+	_drop_loot()
 	queue_free()
 
 
@@ -237,3 +239,10 @@ func _spawn_vfx(vfx_scene: PackedScene, spawn_position: Vector2) -> void:
 	if vfx is Node2D:
 		var vfx_2d := vfx as Node2D
 		vfx_2d.global_position = spawn_position
+
+
+func _drop_loot() -> void:
+	if loot_dropper == null or not loot_dropper.has_method("drop_at"):
+		return
+
+	loot_dropper.call("drop_at", global_position)
