@@ -26,6 +26,9 @@ const DETAIL_EQUIPPED_COLOR := Color(0.42, 0.96, 0.56, 1.0)
 const WORKSPACE_PANEL_COLOR := Color(0.055, 0.06, 0.068, 0.78)
 const WORKSPACE_PANEL_BORDER_COLOR := Color(0.36, 0.39, 0.43, 0.92)
 const WORKSPACE_MUTED_COLOR := Color(0.62, 0.66, 0.7, 1.0)
+const CONTEXT_MENU_COLOR := Color(0.075, 0.08, 0.09, 0.98)
+const CONTEXT_MENU_HOVER_COLOR := Color(0.18, 0.22, 0.25, 1.0)
+const CONTEXT_BUTTON_COLOR := Color(0.105, 0.11, 0.125, 1.0)
 const DRAG_SOURCE_NONE := &""
 const DRAG_SOURCE_INVENTORY := &"inventory"
 const DRAG_SOURCE_EQUIPMENT := &"equipment"
@@ -103,6 +106,12 @@ var _status_value_labels: Dictionary = {}
 var _external_inventory_visible: bool = false
 var _external_container_label: String = "CONTAINER"
 var _crosshair_was_visible_before_inventory: bool = true
+var _context_menu: Control
+var _split_dialog: Control
+var _split_dialog_inventory: Node
+var _split_dialog_entry_id: int = -1
+var _split_dialog_max_quantity: int = 1
+var _split_dialog_quantity_input: LineEdit
 
 
 func _ready() -> void:
@@ -373,6 +382,8 @@ func set_inventory_open(is_open: bool) -> void:
 	else:
 		_cancel_drag()
 		_hide_detail_panel()
+		_hide_context_menu()
+		_hide_split_dialog()
 		_clear_external_container()
 		_set_inventory_camera(false)
 
@@ -778,8 +789,10 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			_begin_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			if not _try_split_stack_entry(_inventory, entry_id):
-				_try_quick_equip_entry(entry_id)
+			if mouse_button.shift_pressed:
+				_try_split_stack_entry(_inventory, entry_id)
+			else:
+				_show_item_context_menu(_inventory, entry_id, DRAG_SOURCE_INVENTORY)
 			get_viewport().set_input_as_handled()
 
 
@@ -790,7 +803,10 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			_begin_external_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			_try_split_stack_entry(_external_inventory, entry_id)
+			if mouse_button.shift_pressed:
+				_try_split_stack_entry(_external_inventory, entry_id)
+			else:
+				_show_item_context_menu(_external_inventory, entry_id, DRAG_SOURCE_EXTERNAL)
 			get_viewport().set_input_as_handled()
 
 
@@ -799,6 +815,8 @@ func _begin_drag(entry_id: int) -> void:
 		return
 
 	_hide_detail_panel()
+	_hide_context_menu()
+	_hide_split_dialog()
 	_drag_source = DRAG_SOURCE_INVENTORY
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
@@ -822,6 +840,8 @@ func _begin_external_drag(entry_id: int) -> void:
 		return
 
 	_hide_detail_panel()
+	_hide_context_menu()
+	_hide_split_dialog()
 	_drag_source = DRAG_SOURCE_EXTERNAL
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
@@ -1259,7 +1279,255 @@ func _can_stack_dragged_entry_at_cell(
 	)) >= 0
 
 
-func _try_split_stack_entry(target_inventory: Node, entry_id: int) -> bool:
+func _show_item_context_menu(target_inventory: Node, entry_id: int, source: StringName) -> void:
+	if target_inventory == null:
+		return
+
+	var entry: Dictionary = target_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return
+
+	_hide_detail_panel()
+	_hide_context_menu()
+	_hide_split_dialog()
+
+	var actions: Array[Dictionary] = []
+	if _can_split_stack_entry(target_inventory, entry_id):
+		actions.append({"label": "Split", "action": &"split"})
+	if source == DRAG_SOURCE_INVENTORY and _can_quick_equip_entry(entry_id):
+		actions.append({"label": "Equip", "action": &"equip"})
+
+	var has_actions := not actions.is_empty()
+	if not has_actions:
+		actions.append({"label": "No Action", "action": &"none"})
+
+	var menu_width := 156.0
+	var row_height := 28.0
+	var menu_height := 12.0 + float(actions.size()) * row_height + float(maxi(actions.size() - 1, 0)) * 4.0
+	var menu := Panel.new()
+	menu.name = "ItemContextMenu"
+	menu.mouse_filter = Control.MOUSE_FILTER_STOP
+	menu.z_index = 60
+	menu.size = Vector2(menu_width, menu_height)
+	menu.custom_minimum_size = menu.size
+	menu.add_theme_stylebox_override("panel", _make_flat_style(
+		CONTEXT_MENU_COLOR,
+		DETAIL_PANEL_BORDER_COLOR,
+		1
+	))
+	root.add_child(menu)
+	_context_menu = menu
+
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_STOP
+	rows.position = Vector2(6, 6)
+	rows.size = Vector2(menu_width - 12.0, menu_height - 12.0)
+	rows.add_theme_constant_override("separation", 4)
+	menu.add_child(rows)
+
+	for action in actions:
+		var action_name: StringName = action.get("action", &"none")
+		var button := _create_context_menu_button(str(action.get("label", "Action")))
+		button.disabled = action_name == &"none"
+		if action_name == &"split":
+			button.pressed.connect(Callable(self, "_on_context_split_pressed").bind(target_inventory, entry_id))
+		elif action_name == &"equip":
+			button.pressed.connect(Callable(self, "_on_context_equip_pressed").bind(entry_id))
+		rows.add_child(button)
+
+	_position_floating_panel(menu, get_viewport().get_mouse_position())
+
+
+func _create_context_menu_button(text: String) -> Button:
+	var button := Button.new()
+	button.text = text
+	button.custom_minimum_size = Vector2(0, 28)
+	button.focus_mode = Control.FOCUS_NONE
+	button.add_theme_font_size_override("font_size", 12)
+	button.add_theme_color_override("font_color", DETAIL_TEXT_COLOR)
+	button.add_theme_color_override("font_disabled_color", DETAIL_MUTED_COLOR)
+	button.add_theme_stylebox_override("normal", _make_flat_style(CONTEXT_BUTTON_COLOR, Color.TRANSPARENT, 0))
+	button.add_theme_stylebox_override("hover", _make_flat_style(CONTEXT_MENU_HOVER_COLOR, Color.TRANSPARENT, 0))
+	button.add_theme_stylebox_override("pressed", _make_flat_style(Color(0.22, 0.28, 0.32, 1.0), Color.TRANSPARENT, 0))
+	button.add_theme_stylebox_override("disabled", _make_flat_style(Color(0.08, 0.085, 0.095, 1.0), Color.TRANSPARENT, 0))
+	return button
+
+
+func _on_context_split_pressed(target_inventory: Node, entry_id: int) -> void:
+	_hide_context_menu()
+	_show_split_dialog(target_inventory, entry_id)
+
+
+func _on_context_equip_pressed(entry_id: int) -> void:
+	_hide_context_menu()
+	_hide_split_dialog()
+	_try_quick_equip_entry(entry_id)
+
+
+func _show_split_dialog(target_inventory: Node, entry_id: int) -> void:
+	if not _can_split_stack_entry(target_inventory, entry_id):
+		return
+
+	var entry: Dictionary = target_inventory.get_entry(entry_id)
+	var item_id: StringName = entry.get("item_id", &"")
+	var definition: Dictionary = _get_item_definition_for_inventory(target_inventory, item_id)
+	var quantity: int = int(entry.get("quantity", 1))
+
+	_split_dialog_inventory = target_inventory
+	_split_dialog_entry_id = entry_id
+	_split_dialog_max_quantity = maxi(quantity - 1, 1)
+
+	var dialog := Panel.new()
+	dialog.name = "SplitStackDialog"
+	dialog.mouse_filter = Control.MOUSE_FILTER_STOP
+	dialog.z_index = 65
+	dialog.size = Vector2(320, 170)
+	dialog.custom_minimum_size = dialog.size
+	dialog.add_theme_stylebox_override("panel", _make_flat_style(
+		CONTEXT_MENU_COLOR,
+		DETAIL_PANEL_BORDER_COLOR,
+		1
+	))
+	root.add_child(dialog)
+	_split_dialog = dialog
+
+	var margin := _create_margin_container(14, 12, 14, 12)
+	dialog.add_child(margin)
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_STOP
+	rows.add_theme_constant_override("separation", 8)
+	margin.add_child(rows)
+
+	var title := Label.new()
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.text = "SPLIT STACK"
+	title.modulate = DETAIL_TEXT_COLOR
+	title.add_theme_font_size_override("font_size", 15)
+	rows.add_child(title)
+
+	var note := Label.new()
+	note.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	note.text = "%s x%d" % [str(definition.get("name", "Item")), quantity]
+	note.modulate = DETAIL_MUTED_COLOR
+	note.add_theme_font_size_override("font_size", 11)
+	note.clip_text = true
+	rows.add_child(note)
+
+	var quantity_row := HBoxContainer.new()
+	quantity_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	quantity_row.add_theme_constant_override("separation", 6)
+	rows.add_child(quantity_row)
+
+	quantity_row.add_child(_create_quantity_step_button("-10", -10))
+	quantity_row.add_child(_create_quantity_step_button("-1", -1))
+
+	_split_dialog_quantity_input = LineEdit.new()
+	_split_dialog_quantity_input.custom_minimum_size = Vector2(86, 30)
+	_split_dialog_quantity_input.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_split_dialog_quantity_input.max_length = 4
+	_split_dialog_quantity_input.text_submitted.connect(_on_split_quantity_submitted)
+	quantity_row.add_child(_split_dialog_quantity_input)
+
+	quantity_row.add_child(_create_quantity_step_button("+1", 1))
+	quantity_row.add_child(_create_quantity_step_button("+10", 10))
+
+	var action_row := HBoxContainer.new()
+	action_row.mouse_filter = Control.MOUSE_FILTER_STOP
+	action_row.alignment = BoxContainer.ALIGNMENT_END
+	action_row.add_theme_constant_override("separation", 8)
+	rows.add_child(action_row)
+
+	var cancel_button := _create_dialog_action_button("Cancel")
+	cancel_button.pressed.connect(_hide_split_dialog)
+	action_row.add_child(cancel_button)
+
+	var split_button := _create_dialog_action_button("Split")
+	split_button.pressed.connect(_confirm_split_quantity)
+	action_row.add_child(split_button)
+
+	var default_quantity := clampi(floori(float(quantity) * 0.5), 1, _split_dialog_max_quantity)
+	_set_split_dialog_quantity(default_quantity)
+	_position_floating_panel(dialog, get_viewport().get_mouse_position() + Vector2(8, 8))
+	_split_dialog_quantity_input.grab_focus()
+	_split_dialog_quantity_input.select_all()
+
+
+func _create_quantity_step_button(text: String, delta: int) -> Button:
+	var button := _create_context_menu_button(text)
+	button.custom_minimum_size = Vector2(46, 30)
+	button.pressed.connect(Callable(self, "_adjust_split_dialog_quantity").bind(delta))
+	return button
+
+
+func _create_dialog_action_button(text: String) -> Button:
+	var button := _create_context_menu_button(text)
+	button.custom_minimum_size = Vector2(74, 30)
+	return button
+
+
+func _adjust_split_dialog_quantity(delta: int) -> void:
+	_set_split_dialog_quantity(_get_split_dialog_quantity() + delta)
+
+
+func _set_split_dialog_quantity(quantity: int) -> void:
+	if _split_dialog_quantity_input == null:
+		return
+
+	var clamped_quantity := clampi(quantity, 1, _split_dialog_max_quantity)
+	_split_dialog_quantity_input.text = str(clamped_quantity)
+	_split_dialog_quantity_input.caret_column = _split_dialog_quantity_input.text.length()
+
+
+func _get_split_dialog_quantity() -> int:
+	if _split_dialog_quantity_input == null:
+		return 1
+
+	var text := _split_dialog_quantity_input.text.strip_edges()
+	if not text.is_valid_int():
+		return 1
+
+	return clampi(int(text), 1, _split_dialog_max_quantity)
+
+
+func _on_split_quantity_submitted(_text: String) -> void:
+	_confirm_split_quantity()
+
+
+func _confirm_split_quantity() -> void:
+	var split_quantity := _get_split_dialog_quantity()
+	var target_inventory := _split_dialog_inventory
+	var entry_id := _split_dialog_entry_id
+	_hide_split_dialog()
+	_try_split_stack_entry(target_inventory, entry_id, split_quantity)
+
+
+func _position_floating_panel(floating_panel: Control, target_position: Vector2) -> void:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var margin := 8.0
+	var panel_size: Vector2 = floating_panel.size
+	floating_panel.global_position = Vector2(
+		clampf(target_position.x, margin, viewport_size.x - panel_size.x - margin),
+		clampf(target_position.y, margin, viewport_size.y - panel_size.y - margin)
+	)
+
+
+func _hide_context_menu() -> void:
+	if is_instance_valid(_context_menu):
+		_context_menu.queue_free()
+	_context_menu = null
+
+
+func _hide_split_dialog() -> void:
+	if is_instance_valid(_split_dialog):
+		_split_dialog.queue_free()
+	_split_dialog = null
+	_split_dialog_inventory = null
+	_split_dialog_entry_id = -1
+	_split_dialog_max_quantity = 1
+	_split_dialog_quantity_input = null
+
+
+func _can_split_stack_entry(target_inventory: Node, entry_id: int) -> bool:
 	if target_inventory == null or not target_inventory.has_method("split_entry"):
 		return false
 
@@ -1269,12 +1537,21 @@ func _try_split_stack_entry(target_inventory: Node, entry_id: int) -> bool:
 
 	var item_id: StringName = entry.get("item_id", &"")
 	var definition: Dictionary = _get_item_definition_for_inventory(target_inventory, item_id)
-	if not bool(definition.get("stackable", false)):
-		return false
-	if int(entry.get("quantity", 1)) <= 1:
+	return bool(definition.get("stackable", false)) and int(entry.get("quantity", 1)) > 1
+
+
+func _try_split_stack_entry(target_inventory: Node, entry_id: int, split_quantity: int = -1) -> bool:
+	if target_inventory == null or not target_inventory.has_method("split_entry"):
 		return false
 
-	var split_entry: Dictionary = target_inventory.split_entry(entry_id)
+	var entry: Dictionary = target_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	if not _can_split_stack_entry(target_inventory, entry_id):
+		return false
+
+	var split_entry: Dictionary = target_inventory.split_entry(entry_id, split_quantity)
 	if split_entry.is_empty():
 		_show_warning("NO SPACE")
 		return true
@@ -1302,6 +1579,20 @@ func _drop_item_to_world(item_id: StringName, quantity: int = 1) -> bool:
 		dropped_item_2d.global_position = _player.global_position + Vector2(28, -10)
 
 	return true
+
+
+func _can_quick_equip_entry(entry_id: int) -> bool:
+	if _inventory == null or _equipment == null:
+		return false
+
+	var entry: Dictionary = _inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var definition: Dictionary = _inventory.get_item_definition(item_id)
+	var item_type: StringName = definition.get("type", &"")
+	return _get_quick_equip_slot_for_item_type(item_type) != &""
 
 
 func _try_quick_equip_entry(entry_id: int) -> bool:
@@ -1480,6 +1771,8 @@ func _begin_equipment_drag(slot: StringName) -> void:
 		return
 
 	_hide_detail_panel()
+	_hide_context_menu()
+	_hide_split_dialog()
 	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
 	if item_id == &"":
 		return
