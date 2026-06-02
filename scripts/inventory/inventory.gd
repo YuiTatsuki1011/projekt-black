@@ -86,7 +86,8 @@ func add_item_at(
 	item_id: StringName,
 	quantity: int,
 	position: Vector2i,
-	size_override: Vector2i = Vector2i.ZERO
+	size_override: Vector2i = Vector2i.ZERO,
+	metadata: Dictionary = {}
 ) -> int:
 	if quantity <= 0:
 		return 0
@@ -102,10 +103,27 @@ func add_item_at(
 	if not _is_area_free(position, item_size):
 		return 0
 
-	_create_entry(item_id, position, item_size, stack_quantity)
+	_create_entry(item_id, position, item_size, stack_quantity, metadata)
 	_set_total_quantity(item_id, get_quantity(item_id) + stack_quantity)
 	grid_changed.emit()
 	return stack_quantity
+
+
+func add_item_with_metadata(
+	item_id: StringName,
+	metadata: Dictionary,
+	size_override: Vector2i = Vector2i.ZERO
+) -> bool:
+	var definition: Dictionary = get_item_definition(item_id)
+	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	if size_override.x > 0 and size_override.y > 0:
+		item_size = size_override
+
+	var position := _find_first_free_position(item_size)
+	if position.x < 0:
+		return false
+
+	return add_item_at(item_id, 1, position, item_size, metadata) == 1
 
 
 func can_add_item(item_id: StringName, quantity: int = 1) -> bool:
@@ -279,6 +297,27 @@ func get_entry(entry_id: int) -> Dictionary:
 	var entry: Dictionary = _entries[entry_id].duplicate(true)
 	entry["entry_id"] = entry_id
 	return entry
+
+
+func get_entry_metadata(entry_id: int) -> Dictionary:
+	if not _entries.has(entry_id):
+		return {}
+
+	return Dictionary(_entries[entry_id].get("metadata", {})).duplicate(true)
+
+
+func set_entry_metadata(entry_id: int, metadata: Dictionary) -> bool:
+	if not _entries.has(entry_id):
+		return false
+
+	var entry: Dictionary = _entries[entry_id]
+	if metadata.is_empty():
+		entry.erase("metadata")
+	else:
+		entry["metadata"] = metadata.duplicate(true)
+	_entries[entry_id] = entry
+	grid_changed.emit()
+	return true
 
 
 func can_place(entry_id: int, position: Vector2i, size_override: Vector2i = Vector2i.ZERO) -> bool:
@@ -489,7 +528,13 @@ static func _get_fallback_item_definition(item_id: StringName) -> Dictionary:
 	}
 
 
-func _create_entry(item_id: StringName, position: Vector2i, size: Vector2i, quantity: int) -> int:
+func _create_entry(
+	item_id: StringName,
+	position: Vector2i,
+	size: Vector2i,
+	quantity: int,
+	metadata: Dictionary = {}
+) -> int:
 	var entry_id: int = _next_entry_id
 	_next_entry_id += 1
 	_entries[entry_id] = {
@@ -498,6 +543,8 @@ func _create_entry(item_id: StringName, position: Vector2i, size: Vector2i, quan
 		"size": size,
 		"quantity": quantity,
 	}
+	if not metadata.is_empty():
+		_entries[entry_id]["metadata"] = metadata.duplicate(true)
 	return entry_id
 
 

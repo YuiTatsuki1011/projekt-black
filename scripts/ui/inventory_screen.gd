@@ -703,10 +703,11 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	var position: Vector2i = entry.get("position", Vector2i.ZERO)
 	var size: Vector2i = entry.get("size", Vector2i.ONE)
 	var quantity: int = int(entry.get("quantity", 1))
+	var metadata: Dictionary = entry.get("metadata", {})
 	var definition: Dictionary = _inventory.get_item_definition(item_id)
 	var display_size := _drag_item_size if is_dragged else size
 
-	var item_panel := _create_item_panel(definition, quantity, display_size, is_dragged)
+	var item_panel := _create_item_panel(definition, quantity, display_size, is_dragged, metadata)
 	item_panel.position = _grid_to_local(position)
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
@@ -747,10 +748,11 @@ func _add_external_item_node(entry: Dictionary, is_dragged: bool = false) -> voi
 	var position: Vector2i = entry.get("position", Vector2i.ZERO)
 	var size: Vector2i = entry.get("size", Vector2i.ONE)
 	var quantity: int = int(entry.get("quantity", 1))
+	var metadata: Dictionary = entry.get("metadata", {})
 	var definition: Dictionary = _get_item_definition_for_inventory(_external_inventory, item_id)
 	var display_size := _drag_item_size if is_dragged else size
 
-	var item_panel := _create_item_panel(definition, quantity, display_size, is_dragged)
+	var item_panel := _create_item_panel(definition, quantity, display_size, is_dragged, metadata)
 	item_panel.position = _grid_to_local(position)
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_external_item_gui_input.bind(entry_id))
@@ -762,7 +764,13 @@ func _add_external_item_node(entry: Dictionary, is_dragged: bool = false) -> voi
 	_external_item_nodes[entry_id] = item_panel
 
 
-func _create_item_panel(definition: Dictionary, quantity: int, size: Vector2i, is_dragged: bool = false) -> Panel:
+func _create_item_panel(
+	definition: Dictionary,
+	quantity: int,
+	size: Vector2i,
+	is_dragged: bool = false,
+	metadata: Dictionary = {}
+) -> Panel:
 	var item_panel := Panel.new()
 	item_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	item_panel.size = _entry_pixel_size(size)
@@ -784,7 +792,7 @@ func _create_item_panel(definition: Dictionary, quantity: int, size: Vector2i, i
 	label.offset_bottom = -2.0
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.text = _get_item_label(definition, quantity, size)
+	label.text = _get_item_label(definition, quantity, size, metadata)
 	label.add_theme_font_size_override("font_size", 9)
 	item_panel.add_child(label)
 
@@ -1246,7 +1254,11 @@ func _drop_dragged_inventory_entry_to_world() -> bool:
 	if dropped_entry.is_empty():
 		return false
 
-	return _drop_item_to_world(dropped_entry.get("item_id", &""), int(dropped_entry.get("quantity", 1)))
+	return _drop_item_to_world(
+		dropped_entry.get("item_id", &""),
+		int(dropped_entry.get("quantity", 1)),
+		dropped_entry.get("metadata", {})
+	)
 
 
 func _drop_dragged_external_entry_to_world() -> bool:
@@ -1257,7 +1269,11 @@ func _drop_dragged_external_entry_to_world() -> bool:
 	if dropped_entry.is_empty():
 		return false
 
-	return _drop_item_to_world(dropped_entry.get("item_id", &""), int(dropped_entry.get("quantity", 1)))
+	return _drop_item_to_world(
+		dropped_entry.get("item_id", &""),
+		int(dropped_entry.get("quantity", 1)),
+		dropped_entry.get("metadata", {})
+	)
 
 
 func _finish_split_drag(target_cell: Vector2i, external_target_cell: Vector2i) -> bool:
@@ -1861,13 +1877,14 @@ func _try_split_stack_entry(target_inventory: Node, entry_id: int, split_quantit
 	return true
 
 
-func _drop_item_to_world(item_id: StringName, quantity: int = 1) -> bool:
+func _drop_item_to_world(item_id: StringName, quantity: int = 1, metadata: Dictionary = {}) -> bool:
 	if dropped_item_scene == null or _player == null:
 		return false
 
 	var dropped_item := dropped_item_scene.instantiate()
 	dropped_item.set("item_id", item_id)
 	dropped_item.set("quantity", quantity)
+	dropped_item.set("metadata", metadata)
 
 	var drop_parent: Node = get_tree().current_scene
 	if drop_parent == null:
@@ -2332,7 +2349,8 @@ func _show_entry_details(entry_id: int) -> void:
 		entry.get("item_id", &""),
 		int(entry.get("quantity", 1)),
 		true,
-		entry.get("size", Vector2i.ONE)
+		entry.get("size", Vector2i.ONE),
+		entry.get("metadata", {})
 	)
 
 
@@ -2350,7 +2368,8 @@ func _show_external_entry_details(entry_id: int) -> void:
 		entry.get("item_id", &""),
 		int(entry.get("quantity", 1)),
 		true,
-		entry.get("size", Vector2i.ONE)
+		entry.get("size", Vector2i.ONE),
+		entry.get("metadata", {})
 	)
 
 
@@ -2372,7 +2391,8 @@ func _show_item_details(
 	item_id: StringName,
 	quantity: int,
 	compare_to_equipped: bool,
-	display_size: Vector2i = Vector2i.ZERO
+	display_size: Vector2i = Vector2i.ZERO,
+	metadata: Dictionary = {}
 ) -> void:
 	if item_id == &"" or _inventory == null:
 		_hide_detail_panel()
@@ -2395,7 +2415,8 @@ func _show_item_details(
 		quantity,
 		weapon,
 		compare_weapon,
-		display_size
+		display_size,
+		metadata
 	)
 
 	var should_show_equipped := compare_to_equipped and weapon != null and compare_slot != &""
@@ -2555,7 +2576,8 @@ func _populate_item_detail_card(
 	quantity: int,
 	weapon: Resource,
 	compare_weapon: Resource,
-	display_size: Vector2i = Vector2i.ZERO
+	display_size: Vector2i = Vector2i.ZERO,
+	metadata: Dictionary = {}
 ) -> void:
 	var previous_rows := _detail_rows
 	_detail_rows = target_rows
@@ -2577,7 +2599,7 @@ func _populate_item_detail_card(
 	elif weapon != null and item_type == &"melee_weapon":
 		_populate_melee_weapon_details(weapon, compare_weapon)
 	else:
-		_populate_generic_item_details(definition, quantity, display_size)
+		_populate_generic_item_details(definition, quantity, display_size, metadata)
 
 	_detail_rows = previous_rows
 
@@ -2611,6 +2633,13 @@ func _populate_ranged_weapon_details(weapon: Resource, compare_weapon: Resource)
 		true
 	)
 	_add_detail_stat_row(
+		"Chamber",
+		str(_get_resource_int(weapon, &"chamber_size")),
+		_get_resource_int(weapon, &"chamber_size"),
+		_get_compare_int(compare_weapon, &"chamber_size"),
+		true
+	)
+	_add_detail_stat_row(
 		"Fire Interval",
 		_format_seconds(_get_resource_float(weapon, &"fire_cooldown")),
 		_get_resource_float(weapon, &"fire_cooldown"),
@@ -2635,6 +2664,10 @@ func _populate_ranged_weapon_details(weapon: Resource, compare_weapon: Resource)
 	var ammo_id := StringName(weapon.get("ammo_item_id"))
 	var ammo_definition: Dictionary = _inventory.get_item_definition(ammo_id)
 	_add_detail_stat_row("Ammo", str(ammo_definition.get("name", ammo_id)))
+	var magazine_id := StringName(weapon.get("magazine_item_id"))
+	if magazine_id != &"":
+		var magazine_definition: Dictionary = _inventory.get_item_definition(magazine_id)
+		_add_detail_stat_row("Magazine Item", str(magazine_definition.get("name", magazine_id)))
 
 
 func _populate_melee_weapon_details(weapon: Resource, compare_weapon: Resource) -> void:
@@ -2680,10 +2713,19 @@ func _populate_melee_weapon_details(weapon: Resource, compare_weapon: Resource) 
 func _populate_generic_item_details(
 	definition: Dictionary,
 	quantity: int,
-	display_size: Vector2i = Vector2i.ZERO
+	display_size: Vector2i = Vector2i.ZERO,
+	metadata: Dictionary = {}
 ) -> void:
 	var item_size: Vector2i = _resolve_display_size(definition, display_size)
 	_add_detail_stat_row("Grid Size", "%dx%d" % [item_size.x, item_size.y])
+	if StringName(definition.get("type", &"")) == &"magazine":
+		var capacity := int(definition.get("magazine_capacity", metadata.get("capacity", 0)))
+		var ammo_count := int(metadata.get("ammo_count", 0))
+		_add_detail_stat_row("Rounds", "%d / %d" % [ammo_count, capacity])
+		var ammo_id := StringName(definition.get("ammo_item_id", metadata.get("ammo_item_id", &"")))
+		if ammo_id != &"":
+			var ammo_definition: Dictionary = _inventory.get_item_definition(ammo_id)
+			_add_detail_stat_row("Ammo", str(ammo_definition.get("name", ammo_id)))
 	_add_detail_stat_row("Stackable", "Yes" if bool(definition.get("stackable", false)) else "No")
 	if bool(definition.get("stackable", false)):
 		_add_detail_stat_row("Max Stack", str(int(definition.get("max_stack", quantity))))
@@ -2881,8 +2923,18 @@ func _entry_pixel_size(entry_size: Vector2i) -> Vector2:
 	)
 
 
-func _get_item_label(definition: Dictionary, quantity: int, entry_size: Vector2i) -> String:
+func _get_item_label(
+	definition: Dictionary,
+	quantity: int,
+	entry_size: Vector2i,
+	metadata: Dictionary = {}
+) -> String:
 	var item_name: String = str(definition.get("short_name", definition.get("name", "Item")))
+	if StringName(definition.get("type", &"")) == &"magazine" and metadata.has("ammo_count"):
+		var capacity := int(definition.get("magazine_capacity", metadata.get("capacity", 0)))
+		if capacity > 0:
+			return "%s\n%d/%d" % [item_name, int(metadata.get("ammo_count", 0)), capacity]
+		return "%s\n%d" % [item_name, int(metadata.get("ammo_count", 0))]
 	if quantity > 1:
 		if entry_size.x >= 2:
 			return "%s x%d" % [item_name, quantity]

@@ -1,0 +1,16 @@
+[gd_resource type="Resource" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/inventory/inventory_item_data.gd" id="1_item_data"]
+
+[resource]
+script = ExtResource("1_item_data")
+item_id = &"pistol_magazine"
+display_name = "Pistol Magazine"
+short_name = "Mag"
+size = Vector2i(1, 1)
+stackable = false
+max_stack = 1
+color = Color(0.22, 0.34, 0.38, 1)
+item_type = "magazine"
+ammo_item_id = &"pistol_ammo"
+magazine_capacity = 6

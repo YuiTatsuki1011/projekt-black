@@ -12,6 +12,7 @@ GodotエディタのFileSystemから `.tres` をクリックすると、Inspecto
 - `resources/items/pistol_ammo.tres`: 拳銃弾
 - `resources/items/basic_pistol.tres`: 初期拳銃アイテム
 - `resources/items/heavy_pistol.tres`: 重い拳銃アイテム
+- `resources/items/pistol_magazine.tres`: 拳銃用マガジン
 - `resources/items/field_knife.tres`: 初期ナイフアイテム
 
 ## アイテム表示を変える
@@ -24,14 +25,16 @@ GodotエディタのFileSystemから `.tres` をクリックすると、Inspecto
 - `stackable`: 1枠に複数個をまとめられるか。
 - `max_stack`: 1枠に入る最大数。
 - `color`: 仮表示の色。
-- `item_type`: `item` / `ranged_weapon` / `melee_weapon`。
+- `item_type`: `item` / `ranged_weapon` / `melee_weapon` / `magazine`。
 - `weapon_resource`: 武器アイテムの場合、対応する `resources/weapons/*.tres`。
+- `ammo_item_id`: マガジンの場合、中に入る弾薬ID。
+- `magazine_capacity`: マガジンの場合、最大装填数。
 
 ## 武器性能を変える
 
 武器の性能は `resources/weapons/` の `.tres` ファイルで編集します。
 
-- 銃: `damage`, `magazine_size`, `reload_time`, `fire_cooldown`, `recoil_amount` など。
+- 銃: `damage`, `magazine_size`, `magazine_item_id`, `chamber_size`, `reload_time`, `fire_cooldown`, `recoil_amount` など。
 - 近接武器: `combo_damages`, `stamina_cost`, `min_stamina_to_use`, `lunge_speed` など。
 
 インベントリ上の見た目やサイズは `resources/items/`、攻撃性能は `resources/weapons/` と考えると分かりやすいです。
@@ -57,3 +60,14 @@ GodotエディタのFileSystemから `.tres` をクリックすると、Inspecto
 5. `weapon_resource` は空のままにします。
 
 `resources/items/` に置かれた `.tres` は起動時に自動で読み込まれます。
+
+## 新しいマガジンを追加する
+
+1. `resources/items/pistol_magazine.tres` を複製します。
+2. `item_id`, `display_name`, `short_name`, `size`, `color` を編集します。
+3. `item_type` は `magazine` にします。
+4. `ammo_item_id` に対応弾薬を指定します。
+5. `magazine_capacity` に最大装填数を指定します。
+6. 対応する銃Resourceの `magazine_item_id` を、このマガジンの `item_id` にします。
+
+マガジンの現在弾数は、インベントリ内の個体情報として保存されます。Resource側は「そのマガジンの最大容量」を定義します。

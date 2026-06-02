@@ -12,6 +12,7 @@ signal damage_feedback(direction: Vector2)
 
 const ENEMY_COLLISION_MASK: int = 8
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
+const DROPPED_ITEM_SCENE := preload("res://scenes/interaction/dropped_item.tscn")
 
 enum MeleeState {
 	READY,
@@ -28,6 +29,9 @@ enum MeleeState {
 @export var magazine_size: int = 6
 @export var starting_reserve_ammo: int = 24
 @export var ammo_item_id: StringName = &"pistol_ammo"
+@export var magazine_item_id: StringName = &"pistol_magazine"
+@export var chamber_size: int = 1
+@export var starting_spare_magazines: int = 3
 @export var reload_time: float = 1.2
 @export var fire_cooldown: float = 0.22
 @export var recoil_amount: float = 0.18
@@ -78,6 +82,8 @@ enum MeleeState {
 
 var current_ammo: int = 0
 var reserve_ammo: int = 0
+var chamber_ammo: int = 0
+var magazine_ammo: int = 0
 var current_stamina: float = 0.0
 var is_stamina_overheated: bool = false
 
@@ -111,8 +117,11 @@ var _suppress_inventory_ammo_signal: bool = false
 var _has_ranged_weapon: bool = true
 var _has_melee_weapon: bool = true
 var _active_firearm_slot: StringName = &"firearm_1"
-var _firearm_ammo_by_slot: Dictionary = {}
 var _firearm_weapon_id_by_slot: Dictionary = {}
+var _firearm_magazine_rounds_by_slot: Dictionary = {}
+var _firearm_chamber_rounds_by_slot: Dictionary = {}
+var _firearm_has_magazine_by_slot: Dictionary = {}
+var _firearm_magazine_item_id_by_slot: Dictionary = {}
 var _firearm_slot_input_was_pressed: Array[bool] = [false, false, false, false]
 var _is_sub_weapon_aiming: bool = false
 var _sub_weapon_fire_was_pressed: bool = false
@@ -131,8 +140,9 @@ func _ready() -> void:
 	if equipment != null and equipment.has_signal("equipment_changed"):
 		equipment.connect("equipment_changed", Callable(self, "_on_equipment_changed"))
 	inventory.item_quantity_changed.connect(_on_inventory_item_quantity_changed)
-	if inventory.get_quantity(ammo_item_id) <= 0 and starting_reserve_ammo > 0:
-		inventory.add_item(ammo_item_id, starting_reserve_ammo)
+	if inventory.has_signal("grid_changed"):
+		inventory.grid_changed.connect(_on_inventory_grid_changed)
+	_ensure_starting_ammo_supplies()
 	_sync_reserve_ammo(false)
 	current_stamina = max_stamina
 	_configure_aim_bones()
@@ -175,6 +185,9 @@ func _apply_ranged_weapon_stats(ranged_weapon: Resource) -> void:
 	magazine_size = int(_get_resource_value(ranged_weapon, &"magazine_size", magazine_size))
 	starting_reserve_ammo = int(_get_resource_value(ranged_weapon, &"starting_reserve_ammo", starting_reserve_ammo))
 	ammo_item_id = StringName(_get_resource_value(ranged_weapon, &"ammo_item_id", ammo_item_id))
+	magazine_item_id = StringName(_get_resource_value(ranged_weapon, &"magazine_item_id", magazine_item_id))
+	chamber_size = int(_get_resource_value(ranged_weapon, &"chamber_size", chamber_size))
+	starting_spare_magazines = int(_get_resource_value(ranged_weapon, &"starting_spare_magazines", starting_spare_magazines))
 	reload_time = float(_get_resource_value(ranged_weapon, &"reload_time", reload_time))
 	fire_cooldown = float(_get_resource_value(ranged_weapon, &"fire_cooldown", fire_cooldown))
 	recoil_amount = float(_get_resource_value(ranged_weapon, &"recoil_amount", recoil_amount))
@@ -203,6 +216,8 @@ func _clear_ranged_weapon_stats() -> void:
 	bullet_damage = 0
 	magazine_size = 0
 	starting_reserve_ammo = 0
+	chamber_size = 0
+	starting_spare_magazines = 0
 	reload_time = 0.0
 	fire_cooldown = 0.0
 	recoil_amount = 0.0
@@ -278,6 +293,20 @@ func _get_weapon_magazine_size(weapon: Resource) -> int:
 	return int(_get_resource_value(weapon, &"magazine_size", 0))
 
 
+func _get_weapon_magazine_item_id(weapon: Resource) -> StringName:
+	if weapon == null:
+		return &""
+
+	return StringName(_get_resource_value(weapon, &"magazine_item_id", &""))
+
+
+func _get_weapon_chamber_size(weapon: Resource) -> int:
+	if weapon == null:
+		return 0
+
+	return int(_get_resource_value(weapon, &"chamber_size", 0))
+
+
 func _sync_all_firearm_slot_caches() -> void:
 	for slot in FIREARM_SLOT_IDS:
 		_sync_firearm_slot_cache(slot)
@@ -286,8 +315,11 @@ func _sync_all_firearm_slot_caches() -> void:
 func _sync_firearm_slot_cache(slot: StringName) -> void:
 	var weapon := _get_equipped_firearm_for_slot(slot)
 	if weapon == null:
-		_firearm_ammo_by_slot.erase(slot)
 		_firearm_weapon_id_by_slot.erase(slot)
+		_firearm_magazine_rounds_by_slot.erase(slot)
+		_firearm_chamber_rounds_by_slot.erase(slot)
+		_firearm_has_magazine_by_slot.erase(slot)
+		_firearm_magazine_item_id_by_slot.erase(slot)
 		return
 
 	var weapon_id := _get_weapon_id(weapon)
@@ -295,25 +327,41 @@ func _sync_firearm_slot_cache(slot: StringName) -> void:
 		return
 
 	_firearm_weapon_id_by_slot[slot] = weapon_id
-	_firearm_ammo_by_slot[slot] = _get_weapon_magazine_size(weapon)
+	_firearm_magazine_rounds_by_slot[slot] = _get_weapon_magazine_size(weapon)
+	_firearm_chamber_rounds_by_slot[slot] = 1 if _get_weapon_chamber_size(weapon) > 0 else 0
+	_firearm_has_magazine_by_slot[slot] = _get_weapon_magazine_size(weapon) > 0
+	_firearm_magazine_item_id_by_slot[slot] = _get_weapon_magazine_item_id(weapon)
 
 
 func _save_active_firearm_ammo() -> void:
 	if _active_firearm_slot == &"" or not _has_ranged_weapon:
 		return
 
-	_firearm_ammo_by_slot[_active_firearm_slot] = current_ammo
+	_firearm_magazine_rounds_by_slot[_active_firearm_slot] = magazine_ammo
+	_firearm_chamber_rounds_by_slot[_active_firearm_slot] = chamber_ammo
+	_firearm_has_magazine_by_slot[_active_firearm_slot] = _has_active_magazine_inserted()
+	_firearm_magazine_item_id_by_slot[_active_firearm_slot] = magazine_item_id
 
 
 func _load_active_firearm_ammo() -> void:
 	if not _has_ranged_weapon:
 		current_ammo = 0
+		magazine_ammo = 0
+		chamber_ammo = 0
 		return
 
-	if not _firearm_ammo_by_slot.has(_active_firearm_slot):
-		_firearm_ammo_by_slot[_active_firearm_slot] = magazine_size
+	if not _firearm_magazine_rounds_by_slot.has(_active_firearm_slot):
+		_firearm_magazine_rounds_by_slot[_active_firearm_slot] = magazine_size
+	if not _firearm_chamber_rounds_by_slot.has(_active_firearm_slot):
+		_firearm_chamber_rounds_by_slot[_active_firearm_slot] = 1 if chamber_size > 0 else 0
+	if not _firearm_has_magazine_by_slot.has(_active_firearm_slot):
+		_firearm_has_magazine_by_slot[_active_firearm_slot] = magazine_size > 0
+	if not _firearm_magazine_item_id_by_slot.has(_active_firearm_slot):
+		_firearm_magazine_item_id_by_slot[_active_firearm_slot] = magazine_item_id
 
-	current_ammo = mini(int(_firearm_ammo_by_slot.get(_active_firearm_slot, magazine_size)), magazine_size)
+	magazine_ammo = clampi(int(_firearm_magazine_rounds_by_slot.get(_active_firearm_slot, magazine_size)), 0, magazine_size)
+	chamber_ammo = clampi(int(_firearm_chamber_rounds_by_slot.get(_active_firearm_slot, 0)), 0, chamber_size)
+	_update_current_ammo_from_loaded_parts()
 
 
 func _on_equipment_changed(slot: StringName) -> void:
@@ -546,7 +594,7 @@ func _start_reload() -> void:
 	if not _has_ranged_weapon:
 		return
 
-	if _is_reloading or current_ammo >= magazine_size or reserve_ammo <= 0:
+	if _is_reloading or _find_best_reload_magazine_entry_id() < 0:
 		return
 
 	_is_reloading = true
@@ -555,12 +603,32 @@ func _start_reload() -> void:
 
 
 func _finish_reload() -> void:
-	var ammo_needed: int = magazine_size - current_ammo
-	var ammo_to_load: int = mini(inventory.get_quantity(ammo_item_id), ammo_needed)
-	current_ammo += ammo_to_load
-	_save_active_firearm_ammo()
 	_suppress_inventory_ammo_signal = true
-	inventory.remove_item(ammo_item_id, ammo_to_load)
+	var next_magazine_entry_id := _find_best_reload_magazine_entry_id()
+	if next_magazine_entry_id < 0:
+		_suppress_inventory_ammo_signal = false
+		_is_reloading = false
+		_reload_remaining = 0.0
+		_sync_reserve_ammo()
+		return
+
+	var next_magazine_entry: Dictionary = inventory.remove_entry(next_magazine_entry_id)
+	if next_magazine_entry.is_empty():
+		_suppress_inventory_ammo_signal = false
+		_is_reloading = false
+		_reload_remaining = 0.0
+		_sync_reserve_ammo()
+		return
+
+	_store_or_drop_active_magazine()
+
+	var next_metadata: Dictionary = next_magazine_entry.get("metadata", {})
+	magazine_ammo = _get_magazine_rounds_from_metadata(next_metadata, next_magazine_entry.get("item_id", magazine_item_id))
+	magazine_item_id = next_magazine_entry.get("item_id", magazine_item_id)
+	_firearm_has_magazine_by_slot[_active_firearm_slot] = true
+	_feed_chamber_if_empty()
+	_update_current_ammo_from_loaded_parts()
+	_save_active_firearm_ammo()
 	_suppress_inventory_ammo_signal = false
 	_is_reloading = false
 	_reload_remaining = 0.0
@@ -917,7 +985,16 @@ func _configure_aim_bones() -> void:
 
 
 func _consume_round() -> void:
-	current_ammo -= 1
+	if chamber_ammo > 0:
+		chamber_ammo -= 1
+	elif magazine_ammo > 0:
+		magazine_ammo -= 1
+	else:
+		_update_current_ammo_from_loaded_parts()
+		return
+
+	_feed_chamber_if_empty()
+	_update_current_ammo_from_loaded_parts()
 	_save_active_firearm_ammo()
 	_fire_cooldown_remaining = fire_cooldown
 	_recoil = recoil_amount
@@ -925,16 +1002,156 @@ func _consume_round() -> void:
 	ammo_changed.emit(current_ammo, reserve_ammo)
 
 
+func _update_current_ammo_from_loaded_parts() -> void:
+	chamber_ammo = clampi(chamber_ammo, 0, chamber_size)
+	magazine_ammo = clampi(magazine_ammo, 0, magazine_size)
+	current_ammo = chamber_ammo + magazine_ammo
+
+
+func _feed_chamber_if_empty() -> void:
+	if chamber_size <= 0 or chamber_ammo > 0 or magazine_ammo <= 0:
+		return
+
+	chamber_ammo = 1
+	magazine_ammo -= 1
+
+
+func _has_active_magazine_inserted() -> bool:
+	return bool(_firearm_has_magazine_by_slot.get(_active_firearm_slot, magazine_size > 0))
+
+
+func _find_best_reload_magazine_entry_id() -> int:
+	if inventory == null or magazine_item_id == &"":
+		return -1
+
+	var best_entry_id := -1
+	var best_rounds := -1
+	for entry in inventory.get_entries():
+		if entry.get("item_id", &"") != magazine_item_id:
+			continue
+
+		var rounds := _get_magazine_rounds_from_entry(entry)
+		if rounds <= 0:
+			continue
+		if _has_active_magazine_inserted() and rounds <= magazine_ammo:
+			continue
+		if rounds > best_rounds:
+			best_rounds = rounds
+			best_entry_id = int(entry.get("entry_id", -1))
+
+	return best_entry_id
+
+
+func _get_magazine_rounds_from_entry(entry: Dictionary) -> int:
+	return _get_magazine_rounds_from_metadata(entry.get("metadata", {}), entry.get("item_id", magazine_item_id))
+
+
+func _get_magazine_rounds_from_metadata(metadata: Dictionary, item_id: StringName) -> int:
+	var definition: Dictionary = inventory.get_item_definition(item_id) if inventory != null else {}
+	var capacity := int(definition.get("magazine_capacity", magazine_size))
+	if metadata.has("capacity"):
+		capacity = int(metadata.get("capacity", capacity))
+
+	var rounds := capacity
+	if metadata.has("ammo_count"):
+		rounds = int(metadata.get("ammo_count", 0))
+
+	return clampi(rounds, 0, capacity)
+
+
+func _make_magazine_metadata(rounds: int) -> Dictionary:
+	return {
+		"ammo_count": clampi(rounds, 0, magazine_size),
+		"capacity": magazine_size,
+		"ammo_item_id": ammo_item_id,
+	}
+
+
+func _store_or_drop_active_magazine() -> void:
+	if not _has_active_magazine_inserted() or magazine_item_id == &"":
+		return
+
+	var metadata := _make_magazine_metadata(magazine_ammo)
+	if inventory != null and inventory.has_method("add_item_with_metadata"):
+		if bool(inventory.call("add_item_with_metadata", magazine_item_id, metadata)):
+			return
+
+	_drop_item_to_world(magazine_item_id, 1, metadata)
+
+
+func _drop_item_to_world(item_id: StringName, quantity: int = 1, metadata: Dictionary = {}) -> bool:
+	if item_id == &"":
+		return false
+
+	var dropped_item := DROPPED_ITEM_SCENE.instantiate()
+	dropped_item.set("item_id", item_id)
+	dropped_item.set("quantity", quantity)
+	dropped_item.set("metadata", metadata)
+
+	var drop_parent: Node = get_tree().current_scene
+	if drop_parent == null:
+		drop_parent = get_parent()
+	drop_parent.add_child(dropped_item)
+
+	if dropped_item is Node2D:
+		var dropped_item_2d := dropped_item as Node2D
+		dropped_item_2d.global_position = global_position + Vector2(28, -10)
+
+	return true
+
+
+func _ensure_starting_ammo_supplies() -> void:
+	if inventory == null or not _has_ranged_weapon:
+		return
+
+	if ammo_item_id != &"" and inventory.get_quantity(ammo_item_id) <= 0 and starting_reserve_ammo > 0:
+		inventory.add_item(ammo_item_id, starting_reserve_ammo)
+
+	if magazine_item_id == &"" or starting_spare_magazines <= 0:
+		return
+	if inventory.get_quantity(magazine_item_id) > 0:
+		return
+
+	for _index in range(starting_spare_magazines):
+		if not _add_magazine_to_inventory(magazine_size):
+			break
+
+
+func _add_magazine_to_inventory(rounds: int) -> bool:
+	if inventory == null or magazine_item_id == &"":
+		return false
+	if not inventory.has_method("add_item_with_metadata"):
+		return false
+
+	return bool(inventory.call("add_item_with_metadata", magazine_item_id, _make_magazine_metadata(rounds)))
+
+
 func _sync_reserve_ammo(should_emit: bool = true) -> void:
-	reserve_ammo = inventory.get_quantity(ammo_item_id) if _has_ranged_weapon else 0
+	reserve_ammo = _get_inventory_magazine_rounds() if _has_ranged_weapon else 0
 	if should_emit:
 		ammo_changed.emit(current_ammo, reserve_ammo)
 
 
+func _get_inventory_magazine_rounds() -> int:
+	if inventory == null or magazine_item_id == &"":
+		return 0
+
+	var total_rounds := 0
+	for entry in inventory.get_entries():
+		if entry.get("item_id", &"") == magazine_item_id:
+			total_rounds += _get_magazine_rounds_from_entry(entry)
+
+	return total_rounds
+
+
 func _on_inventory_item_quantity_changed(item_id: StringName, _quantity: int) -> void:
-	if item_id != ammo_item_id:
+	if item_id != ammo_item_id and item_id != magazine_item_id:
 		return
 
+	_sync_reserve_ammo(not _suppress_inventory_ammo_signal)
+
+
+func _on_inventory_grid_changed() -> void:
 	_sync_reserve_ammo(not _suppress_inventory_ammo_signal)
 
 
