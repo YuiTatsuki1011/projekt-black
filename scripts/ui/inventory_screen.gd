@@ -33,9 +33,11 @@ const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4
 @export var close_on_damage: bool = true
 @export var normal_camera_position: Vector2 = Vector2(0, -22)
 @export var normal_camera_zoom: Vector2 = Vector2(2.3, 2.3)
-@export var inventory_camera_position: Vector2 = Vector2(145, -22)
-@export var inventory_camera_zoom: Vector2 = Vector2(2.85, 2.85)
+@export var inventory_camera_position: Vector2 = Vector2(92, -25)
+@export var inventory_camera_zoom: Vector2 = Vector2(6.2, 6.2)
 @export var camera_transition_time: float = 0.18
+@export var inventory_panel_scale: Vector2 = Vector2(1.45, 1.45)
+@export var inventory_panel_right_margin: float = 80.0
 
 @onready var root: Control = $Root
 @onready var shade: ColorRect = $Root/Shade
@@ -83,7 +85,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	visible = true
 	root.visible = false
-	shade.color = Color(0.025, 0.025, 0.028, 0.16)
+	shade.color = Color(0.025, 0.025, 0.028, 0.42)
 
 	var player := get_node_or_null(player_path)
 	if player != null:
@@ -176,8 +178,13 @@ func _is_close_event(event: InputEvent) -> bool:
 
 func _layout_realtime_inventory() -> void:
 	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
-	var target_x: float = viewport_size.x - panel.size.x - 72.0
-	var target_y: float = (viewport_size.y - panel.size.y) * 0.5
+	panel.scale = inventory_panel_scale
+	var panel_size := panel.size
+	if panel_size == Vector2.ZERO:
+		panel_size = panel.get_combined_minimum_size()
+	var scaled_panel_size := panel_size * panel.scale
+	var target_x: float = viewport_size.x - scaled_panel_size.x - inventory_panel_right_margin
+	var target_y: float = (viewport_size.y - scaled_panel_size.y) * 0.5
 	panel.position = Vector2(maxf(target_x, 24.0), maxf(target_y, 40.0))
 
 
