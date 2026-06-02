@@ -749,15 +749,15 @@ func get_firearm_hud_info() -> Dictionary:
 		return {
 			"weapon_name": "No Firearm",
 			"current_loaded_ammo": 0,
-			"max_loaded_ammo": 0,
 			"magazine_count": 0,
+			"loose_ammo_count": 0,
 		}
 
 	return {
 		"weapon_name": _get_active_firearm_display_name(),
 		"current_loaded_ammo": current_ammo,
-		"max_loaded_ammo": magazine_size + chamber_size,
 		"magazine_count": get_active_magazine_statuses().size(),
+		"loose_ammo_count": _get_loose_ammo_count(),
 	}
 
 
@@ -892,6 +892,7 @@ func _finish_reload() -> void:
 	_is_reloading = false
 	_reload_remaining = 0.0
 	_sync_reserve_ammo()
+	_emit_magazine_status_changed()
 	_start_chambering()
 
 
@@ -1563,6 +1564,15 @@ func _get_inventory_magazine_rounds() -> int:
 			total_rounds += _get_magazine_rounds_from_entry(entry)
 
 	return total_rounds
+
+
+func _get_loose_ammo_count() -> int:
+	if inventory == null or ammo_item_id == &"":
+		return 0
+	if not inventory.has_method("get_quantity"):
+		return 0
+
+	return int(inventory.call("get_quantity", ammo_item_id))
 
 
 func _on_inventory_item_quantity_changed(item_id: StringName, _quantity: int) -> void:

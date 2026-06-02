@@ -12,6 +12,8 @@ const ACTIVE_BORDER_WIDTH := 3
 const CURSOR_INDICATOR_SIZE := Vector2(96.0, 96.0)
 const GUN_ICON_SIZE := Vector2(68.0, 42.0)
 const GUN_INFO_GAP := 12.0
+const HUD_TEXT_COLOR := Color(0.88, 0.9, 0.86, 1.0)
+const HUD_WARNING_COLOR := Color(0.95, 0.18, 0.14, 1.0)
 
 @export var player_path: NodePath = NodePath("../Player")
 @export var magazine_panel_margin: Vector2 = Vector2(32.0, 36.0)
@@ -26,6 +28,9 @@ var _player: PlayerController
 var _magazine_panel: Panel
 var _weapon_icon: Control
 var _weapon_status_label: Label
+var _resource_status_row: HBoxContainer
+var _resource_status_prefix: Label
+var _loose_ammo_label: Label
 var _cursor_operation_indicator: Control
 var _last_magazines: Array = []
 var _active_magazine_frames: Array[Control] = []
@@ -97,11 +102,37 @@ func _setup_magazine_panel() -> void:
 	_weapon_status_label.name = "WeaponStatusLabel"
 	_weapon_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_weapon_status_label.add_theme_font_size_override("font_size", 29)
-	_weapon_status_label.add_theme_color_override("font_color", Color(0.88, 0.9, 0.86, 1.0))
+	_weapon_status_label.add_theme_color_override("font_color", HUD_TEXT_COLOR)
 	_weapon_status_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
 	_weapon_status_label.add_theme_constant_override("shadow_offset_x", 1)
 	_weapon_status_label.add_theme_constant_override("shadow_offset_y", 1)
 	_magazine_panel.add_child(_weapon_status_label)
+
+	_resource_status_row = HBoxContainer.new()
+	_resource_status_row.name = "ResourceStatusRow"
+	_resource_status_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_resource_status_row.add_theme_constant_override("separation", 0)
+	_magazine_panel.add_child(_resource_status_row)
+
+	_resource_status_prefix = Label.new()
+	_resource_status_prefix.name = "ResourceStatusPrefix"
+	_resource_status_prefix.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_resource_status_prefix.add_theme_font_size_override("font_size", 29)
+	_resource_status_prefix.add_theme_color_override("font_color", HUD_TEXT_COLOR)
+	_resource_status_prefix.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
+	_resource_status_prefix.add_theme_constant_override("shadow_offset_x", 1)
+	_resource_status_prefix.add_theme_constant_override("shadow_offset_y", 1)
+	_resource_status_row.add_child(_resource_status_prefix)
+
+	_loose_ammo_label = Label.new()
+	_loose_ammo_label.name = "LooseAmmoValue"
+	_loose_ammo_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_loose_ammo_label.add_theme_font_size_override("font_size", 29)
+	_loose_ammo_label.add_theme_color_override("font_color", HUD_TEXT_COLOR)
+	_loose_ammo_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
+	_loose_ammo_label.add_theme_constant_override("shadow_offset_x", 1)
+	_loose_ammo_label.add_theme_constant_override("shadow_offset_y", 1)
+	_resource_status_row.add_child(_loose_ammo_label)
 
 	magazine_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	magazine_row.add_theme_constant_override("separation", int(MAGAZINE_ROW_SEPARATION))
@@ -188,6 +219,7 @@ func _create_magazine_slot(magazine: Dictionary, loading_entry_id: int, loading_
 	var ammo_count := clampi(int(magazine.get("ammo_count", 0)), 0, capacity)
 	var entry_id := int(magazine.get("entry_id", -1))
 	var is_active := bool(magazine.get("is_active_magazine", false))
+	var is_empty := ammo_count <= 0
 
 	var slot := Control.new()
 	slot.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -199,19 +231,19 @@ func _create_magazine_slot(magazine: Dictionary, loading_entry_id: int, loading_
 	icon.position = (MAGAZINE_SLOT_SIZE - MAGAZINE_ICON_SIZE) * 0.5
 	icon.size = MAGAZINE_ICON_SIZE
 	icon.add_theme_stylebox_override("panel", _make_flat_style(
-		Color(0.07, 0.09, 0.1, 0.92),
-		Color(0.46, 0.5, 0.54, 1.0),
+		Color(0.18, 0.035, 0.035, 0.94) if is_empty else Color(0.07, 0.09, 0.1, 0.92),
+		Color(0.84, 0.16, 0.12, 1.0) if is_empty else Color(0.46, 0.5, 0.54, 1.0),
 		1
 	))
 	slot.add_child(icon)
 
 	var fill := ColorRect.new()
 	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	fill.color = Color(0.28, 0.68, 0.78, 0.86)
+	fill.color = Color(0.8, 0.08, 0.06, 0.58) if is_empty else Color(0.28, 0.68, 0.78, 0.86)
 	fill.anchor_left = 0.18
 	fill.anchor_right = 0.82
 	fill.anchor_bottom = 0.88
-	fill.anchor_top = 0.88 - 0.72 * (float(ammo_count) / float(capacity))
+	fill.anchor_top = 0.16 if is_empty else 0.88 - 0.72 * (float(ammo_count) / float(capacity))
 	icon.add_child(fill)
 
 	if entry_id == loading_entry_id:
@@ -237,28 +269,34 @@ func _create_magazine_slot(magazine: Dictionary, loading_entry_id: int, loading_
 
 
 func _update_weapon_status() -> void:
-	if _weapon_status_label == null:
+	if _weapon_status_label == null or _resource_status_prefix == null or _loose_ammo_label == null:
 		return
 
 	var weapon_name := "NO FIREARM"
 	var loaded_ammo := 0
-	var max_loaded_ammo := 0
 	var magazine_count := _last_magazines.size()
+	var loose_ammo_count := 0
+	var has_firearm := false
 
 	if _player != null and _player.has_method("get_firearm_hud_info"):
 		var info: Dictionary = _player.call("get_firearm_hud_info")
 		weapon_name = str(info.get("weapon_name", weapon_name)).to_upper()
 		loaded_ammo = int(info.get("current_loaded_ammo", loaded_ammo))
-		max_loaded_ammo = int(info.get("max_loaded_ammo", max_loaded_ammo))
 		magazine_count = int(info.get("magazine_count", magazine_count))
+		loose_ammo_count = int(info.get("loose_ammo_count", loose_ammo_count))
+		has_firearm = not str(info.get("weapon_name", "")).is_empty() and weapon_name != "NO FIREARM"
 
-	_weapon_status_label.text = "%s  %d/%d\nMAGS x%d" % [
+	_weapon_status_label.text = "%s  %d" % [
 		weapon_name,
 		loaded_ammo,
-		max_loaded_ammo,
-		magazine_count,
 	]
-	_weapon_icon.modulate.a = 1.0 if max_loaded_ammo > 0 else 0.38
+	_resource_status_prefix.text = "MAGS x%d  AMMO x" % magazine_count
+	_loose_ammo_label.text = str(loose_ammo_count)
+	_loose_ammo_label.add_theme_color_override(
+		"font_color",
+		HUD_WARNING_COLOR if loose_ammo_count <= 0 else HUD_TEXT_COLOR
+	)
+	_weapon_icon.modulate.a = 1.0 if has_firearm else 0.38
 
 
 func _start_cursor_operation(duration: float) -> void:
@@ -302,7 +340,10 @@ func _layout_magazine_panel() -> void:
 		return
 
 	var row_width := _get_magazine_row_width()
-	var info_width := GUN_ICON_SIZE.x + GUN_INFO_GAP + _weapon_status_label.get_minimum_size().x
+	var status_width := _weapon_status_label.get_minimum_size().x
+	if _resource_status_row != null:
+		status_width = maxf(status_width, _resource_status_row.get_combined_minimum_size().x)
+	var info_width := GUN_ICON_SIZE.x + GUN_INFO_GAP + status_width
 	var panel_width := maxf(320.0, maxf(row_width, info_width) + MAGAZINE_PANEL_PADDING.x * 2.0)
 	var panel_height := (
 		MAGAZINE_PANEL_PADDING.y * 2.0
@@ -317,8 +358,14 @@ func _layout_magazine_panel() -> void:
 	_weapon_status_label.position = MAGAZINE_PANEL_PADDING + Vector2(GUN_ICON_SIZE.x + GUN_INFO_GAP, 0.0)
 	_weapon_status_label.size = Vector2(
 		panel_width - MAGAZINE_PANEL_PADDING.x * 2.0 - GUN_ICON_SIZE.x - GUN_INFO_GAP,
-		MAGAZINE_INFO_HEIGHT
+		34.0
 	)
+	if _resource_status_row != null:
+		_resource_status_row.position = MAGAZINE_PANEL_PADDING + Vector2(GUN_ICON_SIZE.x + GUN_INFO_GAP, 34.0)
+		_resource_status_row.size = Vector2(
+			panel_width - MAGAZINE_PANEL_PADDING.x * 2.0 - GUN_ICON_SIZE.x - GUN_INFO_GAP,
+			34.0
+		)
 
 	magazine_row.position = Vector2(
 		MAGAZINE_PANEL_PADDING.x,
