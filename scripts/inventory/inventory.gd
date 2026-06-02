@@ -7,7 +7,7 @@ signal grid_changed
 const DEFAULT_ITEM_RESOURCE_DIRECTORY := "res://resources/items"
 
 @export var grid_width: int = 10
-@export var grid_height: int = 6
+@export var grid_height: int = 8
 @export_dir var item_resource_directory: String = DEFAULT_ITEM_RESOURCE_DIRECTORY
 @export var starting_items: Dictionary = {}
 
