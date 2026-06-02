@@ -1744,7 +1744,7 @@ func _is_point_inside_collision_shape(collision_shape: CollisionShape2D, global_
 	return false
 
 
-func _set_interactable_highlight(interactable: Node2D, is_visible: bool, is_hovered: bool = false) -> void:
+func _set_interactable_highlight(interactable: Node2D, is_visible: bool, _is_hovered: bool = false) -> void:
 	if interactable == null or not is_instance_valid(interactable):
 		return
 
@@ -1757,8 +1757,8 @@ func _set_interactable_highlight(interactable: Node2D, is_visible: bool, is_hove
 		return
 
 	highlight.visible = is_visible
-	highlight.width = 3.0 if is_hovered else 2.0
-	highlight.default_color = Color(1.0, 1.0, 1.0, 1.0 if is_hovered else 0.78)
+	highlight.width = 2.0
+	highlight.default_color = Color(1.0, 1.0, 1.0, 0.78)
 
 
 func _create_interaction_highlight(interactable: Node2D) -> Line2D:
