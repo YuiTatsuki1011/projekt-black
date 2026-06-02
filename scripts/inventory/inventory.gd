@@ -264,6 +264,134 @@ func is_cell_free(cell: Vector2i, ignored_entry_id: int = -1) -> bool:
 	return true
 
 
+func get_entry_id_at_cell(cell: Vector2i, ignored_entry_id: int = -1) -> int:
+	if cell.x < 0 or cell.y < 0 or cell.x >= grid_width or cell.y >= grid_height:
+		return -1
+
+	var checked_rect := Rect2i(cell, Vector2i.ONE)
+	for entry_id in _entries:
+		if int(entry_id) == ignored_entry_id:
+			continue
+
+		var entry: Dictionary = _entries[entry_id]
+		var entry_rect := Rect2i(entry.get("position", Vector2i.ZERO), entry.get("size", Vector2i.ONE))
+		if checked_rect.intersects(entry_rect):
+			return int(entry_id)
+
+	return -1
+
+
+func get_stack_target_entry_id(
+	item_id: StringName,
+	position: Vector2i,
+	size: Vector2i,
+	ignored_entry_id: int = -1
+) -> int:
+	var definition: Dictionary = get_item_definition(item_id)
+	if not bool(definition.get("stackable", false)):
+		return -1
+
+	var max_stack: int = int(definition.get("max_stack", 1))
+	for y in size.y:
+		for x in size.x:
+			var entry_id := get_entry_id_at_cell(position + Vector2i(x, y), ignored_entry_id)
+			if entry_id < 0:
+				continue
+
+			var entry: Dictionary = _entries.get(entry_id, {})
+			if entry.get("item_id", &"") != item_id:
+				continue
+			if int(entry.get("quantity", 0)) >= max_stack:
+				continue
+
+			return entry_id
+
+	return -1
+
+
+func stack_entry_onto_entry(source_entry_id: int, target_entry_id: int) -> int:
+	if source_entry_id == target_entry_id:
+		return 0
+	if not _entries.has(source_entry_id) or not _entries.has(target_entry_id):
+		return 0
+
+	var source_entry: Dictionary = _entries[source_entry_id]
+	var target_entry: Dictionary = _entries[target_entry_id]
+	var item_id: StringName = source_entry.get("item_id", &"")
+	if item_id == &"" or target_entry.get("item_id", &"") != item_id:
+		return 0
+
+	var definition: Dictionary = get_item_definition(item_id)
+	if not bool(definition.get("stackable", false)):
+		return 0
+
+	var source_quantity: int = int(source_entry.get("quantity", 0))
+	var target_quantity: int = int(target_entry.get("quantity", 0))
+	var max_stack: int = int(definition.get("max_stack", 1))
+	var moved_quantity: int = mini(source_quantity, maxi(max_stack - target_quantity, 0))
+	if moved_quantity <= 0:
+		return 0
+
+	target_entry["quantity"] = target_quantity + moved_quantity
+	_entries[target_entry_id] = target_entry
+
+	source_quantity -= moved_quantity
+	if source_quantity <= 0:
+		_entries.erase(source_entry_id)
+	else:
+		source_entry["quantity"] = source_quantity
+		_entries[source_entry_id] = source_entry
+
+	grid_changed.emit()
+	return moved_quantity
+
+
+func add_quantity_to_entry(entry_id: int, quantity: int) -> int:
+	if quantity <= 0 or not _entries.has(entry_id):
+		return 0
+
+	var entry: Dictionary = _entries[entry_id]
+	var item_id: StringName = entry.get("item_id", &"")
+	var definition: Dictionary = get_item_definition(item_id)
+	if not bool(definition.get("stackable", false)):
+		return 0
+
+	var entry_quantity: int = int(entry.get("quantity", 0))
+	var max_stack: int = int(definition.get("max_stack", 1))
+	var added_quantity: int = mini(quantity, maxi(max_stack - entry_quantity, 0))
+	if added_quantity <= 0:
+		return 0
+
+	entry["quantity"] = entry_quantity + added_quantity
+	_entries[entry_id] = entry
+	_set_total_quantity(item_id, get_quantity(item_id) + added_quantity)
+	grid_changed.emit()
+	return added_quantity
+
+
+func remove_quantity_from_entry(entry_id: int, quantity: int) -> int:
+	if quantity <= 0 or not _entries.has(entry_id):
+		return 0
+
+	var entry: Dictionary = _entries[entry_id]
+	var item_id: StringName = entry.get("item_id", &"")
+	var entry_quantity: int = int(entry.get("quantity", 0))
+	var removed_quantity: int = mini(quantity, entry_quantity)
+	if removed_quantity <= 0:
+		return 0
+
+	entry_quantity -= removed_quantity
+	if entry_quantity <= 0:
+		_entries.erase(entry_id)
+	else:
+		entry["quantity"] = entry_quantity
+		_entries[entry_id] = entry
+
+	_set_total_quantity(item_id, get_quantity(item_id) - removed_quantity)
+	grid_changed.emit()
+	return removed_quantity
+
+
 func move_entry(entry_id: int, position: Vector2i, size_override: Vector2i = Vector2i.ZERO) -> bool:
 	if not can_place(entry_id, position, size_override):
 		return false

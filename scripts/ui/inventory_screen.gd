@@ -865,7 +865,8 @@ func _finish_drag() -> void:
 		if target_slot != &"":
 			_equip_inventory_entry_to_slot(_drag_entry_id, target_slot)
 		elif _is_mouse_inside_grid():
-			_inventory.move_entry(_drag_entry_id, target_cell, _drag_item_size)
+			if not _try_stack_entry_at_cell(_inventory, _inventory, _drag_entry_id, target_cell, _drag_item_size):
+				_inventory.move_entry(_drag_entry_id, target_cell, _drag_item_size)
 		elif _is_mouse_inside_external_grid() and _external_inventory != null:
 			_transfer_entry_between_inventories(
 				_inventory,
@@ -886,7 +887,8 @@ func _finish_drag() -> void:
 				_drag_item_size
 			)
 		elif _is_mouse_inside_external_grid() and _external_inventory != null:
-			_external_inventory.move_entry(_drag_entry_id, external_target_cell, _drag_item_size)
+			if not _try_stack_entry_at_cell(_external_inventory, _external_inventory, _drag_entry_id, external_target_cell, _drag_item_size):
+				_external_inventory.move_entry(_drag_entry_id, external_target_cell, _drag_item_size)
 		elif not _is_mouse_inside_any_inventory_frame():
 			_drop_dragged_external_entry_to_world()
 	elif _drag_source == DRAG_SOURCE_EQUIPMENT:
@@ -1074,6 +1076,12 @@ func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> v
 	if target_inventory == null or target_root == null:
 		return
 
+	var can_stack_at_target := _can_stack_dragged_entry_at_cell(
+		target_inventory,
+		target_cell,
+		entry_size,
+		ignored_entry_id
+	)
 	for y in entry_size.y:
 		for x in entry_size.x:
 			var cell := target_cell + Vector2i(x, y)
@@ -1081,7 +1089,7 @@ func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> v
 			marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			marker.position = _grid_to_local(cell)
 			marker.size = Vector2(CELL_SIZE, CELL_SIZE)
-			marker.color = PLACEABLE_COLOR if target_inventory.is_cell_free(cell, ignored_entry_id) else BLOCKED_COLOR
+			marker.color = PLACEABLE_COLOR if can_stack_at_target or target_inventory.is_cell_free(cell, ignored_entry_id) else BLOCKED_COLOR
 			target_root.add_child(marker)
 			_placement_markers.append(marker)
 
@@ -1155,7 +1163,12 @@ func _transfer_entry_between_inventories(
 		return false
 
 	if source_inventory == target_inventory:
+		if _try_stack_entry_at_cell(source_inventory, target_inventory, entry_id, target_cell, item_size):
+			return true
 		return source_inventory.move_entry(entry_id, target_cell, item_size)
+
+	if _try_stack_entry_at_cell(source_inventory, target_inventory, entry_id, target_cell, item_size):
+		return true
 
 	var entry: Dictionary = source_inventory.get_entry(entry_id)
 	if entry.is_empty():
@@ -1180,6 +1193,66 @@ func _transfer_entry_between_inventories(
 	source_inventory.add_item_at(item_id, quantity, original_cell, original_size)
 	_show_warning("NO SPACE")
 	return false
+
+
+func _try_stack_entry_at_cell(
+	source_inventory: Node,
+	target_inventory: Node,
+	entry_id: int,
+	target_cell: Vector2i,
+	item_size: Vector2i
+) -> bool:
+	if source_inventory == null or target_inventory == null:
+		return false
+	if not target_inventory.has_method("get_stack_target_entry_id"):
+		return false
+
+	var entry: Dictionary = source_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var ignored_entry_id := entry_id if source_inventory == target_inventory else -1
+	var target_entry_id: int = target_inventory.get_stack_target_entry_id(
+		item_id,
+		target_cell,
+		item_size,
+		ignored_entry_id
+	)
+	if target_entry_id < 0:
+		return false
+
+	if source_inventory == target_inventory:
+		return int(source_inventory.stack_entry_onto_entry(entry_id, target_entry_id)) > 0
+
+	var moved_quantity: int = target_inventory.add_quantity_to_entry(
+		target_entry_id,
+		int(entry.get("quantity", 1))
+	)
+	if moved_quantity <= 0:
+		return false
+
+	source_inventory.remove_quantity_from_entry(entry_id, moved_quantity)
+	return true
+
+
+func _can_stack_dragged_entry_at_cell(
+	target_inventory: Node,
+	target_cell: Vector2i,
+	item_size: Vector2i,
+	ignored_entry_id: int
+) -> bool:
+	if target_inventory == null or not target_inventory.has_method("get_stack_target_entry_id"):
+		return false
+	if _drag_item_id == &"":
+		return false
+
+	return int(target_inventory.get_stack_target_entry_id(
+		_drag_item_id,
+		target_cell,
+		item_size,
+		ignored_entry_id
+	)) >= 0
 
 
 func _drop_item_to_world(item_id: StringName, quantity: int = 1) -> bool:
