@@ -349,6 +349,13 @@ func _input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 
+	if event is InputEventMouseButton:
+		var mouse_button := event as InputEventMouseButton
+		if mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
+			if _is_context_popup_visible() and not _is_mouse_inside_context_popup():
+				_hide_context_menu()
+				_hide_split_dialog()
+
 	if _is_dragging():
 		if event.is_action_pressed("reload"):
 			_rotate_dragged_item()
@@ -789,8 +796,10 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			_begin_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			if mouse_button.shift_pressed:
+			if mouse_button.ctrl_pressed:
 				_try_split_stack_entry(_inventory, entry_id)
+			elif mouse_button.shift_pressed:
+				_quick_transfer_entry_between_inventories(_inventory, _external_inventory, entry_id)
 			else:
 				_show_item_context_menu(_inventory, entry_id, DRAG_SOURCE_INVENTORY)
 			get_viewport().set_input_as_handled()
@@ -803,8 +812,10 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			_begin_external_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			if mouse_button.shift_pressed:
+			if mouse_button.ctrl_pressed:
 				_try_split_stack_entry(_external_inventory, entry_id)
+			elif mouse_button.shift_pressed:
+				_quick_transfer_entry_between_inventories(_external_inventory, _inventory, entry_id)
 			else:
 				_show_item_context_menu(_external_inventory, entry_id, DRAG_SOURCE_EXTERNAL)
 			get_viewport().set_input_as_handled()
@@ -1219,6 +1230,84 @@ func _transfer_entry_between_inventories(
 	return false
 
 
+func _quick_transfer_entry_between_inventories(
+	source_inventory: Node,
+	target_inventory: Node,
+	entry_id: int
+) -> bool:
+	if source_inventory == null:
+		return false
+	if target_inventory == null:
+		_show_warning("NO CONTAINER")
+		return false
+	if source_inventory == target_inventory:
+		return false
+
+	var entry: Dictionary = source_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var quantity: int = int(entry.get("quantity", 1))
+	var original_cell: Vector2i = entry.get("position", Vector2i.ZERO)
+	var item_size: Vector2i = entry.get("size", Vector2i.ONE)
+
+	if not _can_inventory_accept_entry(target_inventory, item_id, quantity, item_size):
+		_show_warning("NO SPACE")
+		return false
+
+	var removed_entry: Dictionary = source_inventory.remove_entry(entry_id)
+	if removed_entry.is_empty():
+		return false
+
+	var added_quantity: int = _add_entry_to_inventory(target_inventory, item_id, quantity, item_size)
+	if added_quantity == quantity:
+		_hide_detail_panel()
+		_refresh()
+		_refresh_external_inventory()
+		return true
+
+	if added_quantity > 0 and target_inventory.has_method("remove_item"):
+		target_inventory.remove_item(item_id, added_quantity)
+	source_inventory.add_item_at(item_id, quantity, original_cell, item_size)
+	_show_warning("NO SPACE")
+	_refresh()
+	_refresh_external_inventory()
+	return false
+
+
+func _can_inventory_accept_entry(
+	target_inventory: Node,
+	item_id: StringName,
+	quantity: int,
+	item_size: Vector2i
+) -> bool:
+	if target_inventory == null:
+		return false
+	if target_inventory.has_method("can_add_item_with_size"):
+		return bool(target_inventory.call("can_add_item_with_size", item_id, quantity, item_size))
+	if target_inventory.has_method("can_add_item"):
+		return bool(target_inventory.call("can_add_item", item_id, quantity))
+
+	return false
+
+
+func _add_entry_to_inventory(
+	target_inventory: Node,
+	item_id: StringName,
+	quantity: int,
+	item_size: Vector2i
+) -> int:
+	if target_inventory == null:
+		return 0
+	if target_inventory.has_method("add_item_with_size"):
+		return int(target_inventory.call("add_item_with_size", item_id, quantity, item_size))
+	if target_inventory.has_method("add_item"):
+		return int(target_inventory.call("add_item", item_id, quantity))
+
+	return 0
+
+
 func _try_stack_entry_at_cell(
 	source_inventory: Node,
 	target_inventory: Node,
@@ -1294,6 +1383,9 @@ func _show_item_context_menu(target_inventory: Node, entry_id: int, source: Stri
 	var actions: Array[Dictionary] = []
 	if _can_split_stack_entry(target_inventory, entry_id):
 		actions.append({"label": "Split", "action": &"split"})
+	var opposite_inventory := _get_opposite_inventory_for_source(source)
+	if opposite_inventory != null:
+		actions.append({"label": "Transfer", "action": &"transfer"})
 	if source == DRAG_SOURCE_INVENTORY and _can_quick_equip_entry(entry_id):
 		actions.append({"label": "Equip", "action": &"equip"})
 
@@ -1331,6 +1423,8 @@ func _show_item_context_menu(target_inventory: Node, entry_id: int, source: Stri
 		button.disabled = action_name == &"none"
 		if action_name == &"split":
 			button.pressed.connect(Callable(self, "_on_context_split_pressed").bind(target_inventory, entry_id))
+		elif action_name == &"transfer":
+			button.pressed.connect(Callable(self, "_on_context_transfer_pressed").bind(target_inventory, opposite_inventory, entry_id))
 		elif action_name == &"equip":
 			button.pressed.connect(Callable(self, "_on_context_equip_pressed").bind(entry_id))
 		rows.add_child(button)
@@ -1362,6 +1456,12 @@ func _on_context_equip_pressed(entry_id: int) -> void:
 	_hide_context_menu()
 	_hide_split_dialog()
 	_try_quick_equip_entry(entry_id)
+
+
+func _on_context_transfer_pressed(source_inventory: Node, target_inventory: Node, entry_id: int) -> void:
+	_hide_context_menu()
+	_hide_split_dialog()
+	_quick_transfer_entry_between_inventories(source_inventory, target_inventory, entry_id)
 
 
 func _show_split_dialog(target_inventory: Node, entry_id: int) -> void:
@@ -1525,6 +1625,34 @@ func _hide_split_dialog() -> void:
 	_split_dialog_entry_id = -1
 	_split_dialog_max_quantity = 1
 	_split_dialog_quantity_input = null
+
+
+func _is_context_popup_visible() -> bool:
+	return is_instance_valid(_context_menu) or is_instance_valid(_split_dialog)
+
+
+func _is_mouse_inside_context_popup() -> bool:
+	var mouse_position := get_viewport().get_mouse_position()
+	if is_instance_valid(_context_menu):
+		var menu_position: Vector2 = _context_menu.get_global_transform().affine_inverse() * mouse_position
+		if Rect2(Vector2.ZERO, _context_menu.size).has_point(menu_position):
+			return true
+
+	if is_instance_valid(_split_dialog):
+		var dialog_position: Vector2 = _split_dialog.get_global_transform().affine_inverse() * mouse_position
+		if Rect2(Vector2.ZERO, _split_dialog.size).has_point(dialog_position):
+			return true
+
+	return false
+
+
+func _get_opposite_inventory_for_source(source: StringName) -> Node:
+	if source == DRAG_SOURCE_EXTERNAL:
+		return _inventory
+	if source == DRAG_SOURCE_INVENTORY and _external_inventory != null:
+		return _external_inventory
+
+	return null
 
 
 func _can_split_stack_entry(target_inventory: Node, entry_id: int) -> bool:

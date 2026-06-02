@@ -30,6 +30,10 @@ func get_quantity(item_id: StringName) -> int:
 
 
 func add_item(item_id: StringName, quantity: int) -> int:
+	return add_item_with_size(item_id, quantity)
+
+
+func add_item_with_size(item_id: StringName, quantity: int, size_override: Vector2i = Vector2i.ZERO) -> int:
 	if quantity <= 0:
 		return 0
 
@@ -37,6 +41,8 @@ func add_item(item_id: StringName, quantity: int) -> int:
 	var added_quantity: int = 0
 	var definition: Dictionary = get_item_definition(item_id)
 	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	if size_override.x > 0 and size_override.y > 0:
+		item_size = size_override
 	var is_stackable: bool = bool(definition.get("stackable", false))
 	var max_stack: int = int(definition.get("max_stack", 1))
 
@@ -103,12 +109,18 @@ func add_item_at(
 
 
 func can_add_item(item_id: StringName, quantity: int = 1) -> bool:
+	return can_add_item_with_size(item_id, quantity)
+
+
+func can_add_item_with_size(item_id: StringName, quantity: int = 1, size_override: Vector2i = Vector2i.ZERO) -> bool:
 	if quantity <= 0:
 		return true
 
 	var remaining_quantity: int = quantity
 	var definition: Dictionary = get_item_definition(item_id)
 	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	if size_override.x > 0 and size_override.y > 0:
+		item_size = size_override
 	var is_stackable: bool = bool(definition.get("stackable", false))
 	var max_stack: int = int(definition.get("max_stack", 1))
 	var occupied_rects: Array[Rect2i] = []
