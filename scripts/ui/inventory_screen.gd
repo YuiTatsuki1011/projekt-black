@@ -1887,6 +1887,7 @@ func _start_magazine_load_job(
 	_magazine_load_elapsed = 0.0
 	_magazine_load_rounds_done = 0
 	_magazine_load_rounds_total = loadable_rounds
+	_hide_detail_panel()
 	_refresh()
 	_refresh_external_inventory()
 	return true
@@ -1907,6 +1908,7 @@ func _start_magazine_check_job(target_inventory: Node, target_entry_id: int) -> 
 		"target_entry_id": target_entry_id,
 	}
 	_magazine_check_elapsed = 0.0
+	_hide_detail_panel()
 	_refresh()
 	_refresh_external_inventory()
 	return true
@@ -2014,6 +2016,10 @@ func _is_magazine_check_target(target_inventory: Node, entry_id: int) -> bool:
 		return false
 
 	return target_inventory == _magazine_check_job.get("target_inventory") and entry_id == int(_magazine_check_job.get("target_entry_id", -1))
+
+
+func _is_magazine_action_target(target_inventory: Node, entry_id: int) -> bool:
+	return _is_magazine_load_target(target_inventory, entry_id) or _is_magazine_check_target(target_inventory, entry_id)
 
 
 func _get_magazine_load_progress() -> float:
@@ -3747,6 +3753,8 @@ func _clear_warning() -> void:
 func _show_entry_details(entry_id: int) -> void:
 	if _is_dragging() or _inventory == null:
 		return
+	if _is_magazine_action_target(_inventory, entry_id):
+		return
 
 	var entry: Dictionary = _inventory.get_entry(entry_id)
 	if entry.is_empty():
@@ -3765,6 +3773,8 @@ func _show_entry_details(entry_id: int) -> void:
 
 func _show_external_entry_details(entry_id: int) -> void:
 	if _is_dragging() or _external_inventory == null:
+		return
+	if _is_magazine_action_target(_external_inventory, entry_id):
 		return
 
 	var entry: Dictionary = _external_inventory.get_entry(entry_id)

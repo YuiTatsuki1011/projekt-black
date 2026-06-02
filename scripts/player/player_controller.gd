@@ -6,6 +6,7 @@ signal fired(ammo_remaining: int)
 signal reload_started(duration: float)
 signal chambering_started(duration: float)
 signal loaded_magazine_check_started(duration: float)
+signal loaded_magazine_check_finished(succeeded: bool)
 signal magazine_status_changed(magazines: Array, loading_entry_id: int, loading_progress: float, is_loading: bool)
 signal interact_requested
 signal died
@@ -16,6 +17,7 @@ signal damage_feedback(direction: Vector2)
 const ENEMY_COLLISION_MASK: int = 8
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
 const DROPPED_ITEM_SCENE := preload("res://scenes/interaction/dropped_item.tscn")
+const ACTIVE_MAGAZINE_STATUS_ENTRY_ID := -10001
 
 enum MeleeState {
 	READY,
@@ -653,6 +655,7 @@ func _update_loaded_magazine_check(delta: float) -> void:
 	_set_loaded_ammo_checked(true, false)
 	ammo_changed.emit(current_ammo, reserve_ammo)
 	_emit_magazine_status_changed()
+	loaded_magazine_check_finished.emit(true)
 
 
 func _cancel_loaded_magazine_check() -> void:
@@ -661,6 +664,7 @@ func _cancel_loaded_magazine_check() -> void:
 
 	_is_checking_loaded_magazine = false
 	_loaded_magazine_check_remaining = 0.0
+	loaded_magazine_check_finished.emit(false)
 
 
 func _handle_firearm_slot_inputs() -> void:
@@ -789,10 +793,46 @@ func _emit_magazine_status_changed() -> void:
 
 
 func get_active_magazine_statuses() -> Array:
-	if inventory == null or not _has_ranged_weapon or not inventory.has_method("get_magazine_entries"):
+	if not _has_ranged_weapon:
 		return []
 
-	return inventory.call("get_magazine_entries", magazine_item_id, ammo_item_id)
+	var statuses: Array = []
+	if _has_active_magazine_inserted():
+		statuses.append({
+			"entry_id": ACTIVE_MAGAZINE_STATUS_ENTRY_ID,
+			"item_id": magazine_item_id,
+			"ammo_item_id": ammo_item_id,
+			"ammo_name": _get_item_display_name(ammo_item_id),
+			"ammo_count": magazine_ammo,
+			"capacity": magazine_size,
+			"is_checked": is_loaded_ammo_checked(),
+			"is_active_magazine": true,
+			"chamber_ammo": chamber_ammo,
+			"total_loaded_ammo": current_ammo,
+			"position": Vector2i(-1, -1),
+		})
+
+	if inventory != null and inventory.has_method("get_magazine_entries"):
+		statuses.append_array(inventory.call("get_magazine_entries", magazine_item_id, ammo_item_id))
+
+	return statuses
+
+
+func get_loaded_ammo_detail() -> Dictionary:
+	if not _has_ranged_weapon:
+		return {}
+
+	return {
+		"is_checked": is_loaded_ammo_checked(),
+		"has_magazine": _has_active_magazine_inserted(),
+		"magazine_ammo": magazine_ammo if _has_active_magazine_inserted() else 0,
+		"magazine_capacity": magazine_size if _has_active_magazine_inserted() else 0,
+		"chamber_ammo": chamber_ammo,
+		"chamber_capacity": chamber_size,
+		"total_loaded_ammo": current_ammo,
+		"ammo_item_id": ammo_item_id,
+		"ammo_name": _get_item_display_name(ammo_item_id),
+	}
 
 
 func get_field_magazine_loading_entry_id() -> int:
@@ -1299,6 +1339,7 @@ func _consume_round() -> void:
 	_recoil = recoil_amount
 	fired.emit(current_ammo)
 	ammo_changed.emit(current_ammo, reserve_ammo)
+	_emit_magazine_status_changed()
 
 
 func _update_current_ammo_from_loaded_parts() -> void:
@@ -1485,6 +1526,7 @@ func _commit_loaded_ammo_change() -> void:
 	_save_active_firearm_ammo()
 	_sync_reserve_ammo(false)
 	ammo_changed.emit(current_ammo, reserve_ammo)
+	_emit_magazine_status_changed()
 
 
 func _find_best_reload_magazine_entry_id() -> int:
@@ -1499,8 +1541,6 @@ func _find_best_reload_magazine_entry_id() -> int:
 
 		var rounds := _get_magazine_rounds_from_entry(entry)
 		if rounds <= 0:
-			continue
-		if _has_active_magazine_inserted() and rounds <= magazine_ammo:
 			continue
 		if rounds > best_rounds:
 			best_rounds = rounds
@@ -1533,6 +1573,15 @@ func _make_magazine_metadata(rounds: int, is_checked: bool = false) -> Dictionar
 		"ammo_item_id": ammo_item_id,
 		"is_checked": is_checked,
 	}
+
+
+func _get_item_display_name(item_id: StringName) -> String:
+	if item_id == &"":
+		return ""
+	if inventory != null and inventory.has_method("get_item_definition"):
+		var definition: Dictionary = inventory.call("get_item_definition", item_id)
+		return str(definition.get("name", item_id))
+	return str(item_id)
 
 
 func _store_or_drop_active_magazine() -> void:
