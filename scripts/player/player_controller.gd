@@ -562,7 +562,10 @@ func _try_fire() -> void:
 		_start_reload()
 		return
 	if chamber_size > 0 and chamber_ammo <= 0:
-		return
+		_feed_chamber_if_empty()
+		_commit_loaded_ammo_change()
+		if chamber_ammo <= 0:
+			return
 
 	if projectile_scene == null:
 		return
@@ -1085,6 +1088,7 @@ func eject_chamber_round() -> Dictionary:
 		return {}
 
 	chamber_ammo -= 1
+	_feed_chamber_if_empty()
 	var ejected := {
 		"item_id": ammo_item_id,
 		"quantity": 1,

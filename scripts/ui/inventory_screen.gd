@@ -130,6 +130,10 @@ var _weapon_inspect_weapon: Resource
 var _weapon_inspect_equipment_slot: StringName = &""
 var _weapon_inspect_dragging: bool = false
 var _weapon_inspect_drag_offset: Vector2 = Vector2.ZERO
+var _inventory_menu_dragging: bool = false
+var _inventory_menu_drag_offset: Vector2 = Vector2.ZERO
+var _inventory_menu_position: Vector2 = Vector2.ZERO
+var _inventory_menu_has_custom_position: bool = false
 
 
 func _ready() -> void:
@@ -201,7 +205,9 @@ void fragment() {
 
 func _setup_workspace_layout() -> void:
 	title_label.text = "BACKPACK"
+	title_label.mouse_filter = Control.MOUSE_FILTER_STOP
 	title_label.add_theme_font_size_override("font_size", 18)
+	title_label.gui_input.connect(_on_inventory_menu_drag_handle_gui_input)
 	panel.z_index = 8
 
 	_gear_panel = _create_workspace_panel("GearPanel")
@@ -214,7 +220,9 @@ func _setup_workspace_layout() -> void:
 	gear_rows.add_theme_constant_override("separation", 10)
 	gear_margin.add_child(gear_rows)
 
-	_add_section_title(gear_rows, "PLAYER")
+	var player_title := _add_section_title(gear_rows, "PLAYER")
+	player_title.mouse_filter = Control.MOUSE_FILTER_STOP
+	player_title.gui_input.connect(_on_inventory_menu_drag_handle_gui_input)
 	_move_equipment_root_to(gear_rows)
 	gear_rows.add_child(_create_status_strip())
 
@@ -227,6 +235,8 @@ func _setup_workspace_layout() -> void:
 	external_rows.add_theme_constant_override("separation", 10)
 	external_margin.add_child(external_rows)
 	_external_title_label = _add_section_title(external_rows, "CONTAINER")
+	_external_title_label.mouse_filter = Control.MOUSE_FILTER_STOP
+	_external_title_label.gui_input.connect(_on_inventory_menu_drag_handle_gui_input)
 	external_rows.add_child(_create_external_grid_view())
 
 
@@ -283,13 +293,12 @@ func _create_status_strip() -> GridContainer:
 	var status_grid := GridContainer.new()
 	status_grid.name = "StatusGrid"
 	status_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	status_grid.columns = 3
+	status_grid.columns = 2
 	status_grid.add_theme_constant_override("h_separation", 8)
 	status_grid.add_theme_constant_override("v_separation", 8)
 	_status_value_labels.clear()
 	_add_status_card(status_grid, &"health", "HP", "-- / --")
 	_add_status_card(status_grid, &"stamina", "STAMINA", "-- / --")
-	_add_status_card(status_grid, &"ammo", "AMMO", "-- / --")
 	return status_grid
 
 
@@ -376,6 +385,17 @@ func _input(event: InputEvent) -> void:
 			if _is_context_popup_visible() and not _is_mouse_inside_context_popup():
 				_hide_context_menu()
 				_hide_split_dialog()
+
+	if _inventory_menu_dragging:
+		if event is InputEventMouseMotion:
+			_move_inventory_menu_to_mouse()
+			get_viewport().set_input_as_handled()
+		elif event is InputEventMouseButton:
+			var mouse_button := event as InputEventMouseButton
+			if mouse_button.button_index == MOUSE_BUTTON_LEFT and not mouse_button.pressed:
+				_inventory_menu_dragging = false
+				get_viewport().set_input_as_handled()
+		return
 
 	if _weapon_inspect_dragging:
 		if event is InputEventMouseMotion:
@@ -569,18 +589,101 @@ func _layout_realtime_inventory() -> void:
 	var menu_y := (viewport_size.y - total_height) * 0.5
 	menu_x = maxf(menu_x, screen_margin)
 	menu_y = maxf(menu_y, screen_margin)
+	var menu_position := Vector2(menu_x, menu_y)
+	if _inventory_menu_has_custom_position:
+		menu_position = _clamp_inventory_menu_position(
+			_inventory_menu_position,
+			menu_width,
+			total_height,
+			viewport_size
+		)
+		_inventory_menu_position = menu_position
 
 	if is_instance_valid(_gear_panel):
 		_gear_panel.visible = not has_external_inventory
-		_gear_panel.position = Vector2(menu_x, menu_y)
+		_gear_panel.position = menu_position
 		_gear_panel.size = Vector2(menu_width, player_menu_panel_height)
 
 	if is_instance_valid(_external_panel):
 		_external_panel.visible = has_external_inventory
-		_external_panel.position = Vector2(menu_x, menu_y)
+		_external_panel.position = menu_position
 		_external_panel.size = Vector2(menu_width, container_panel_height)
 
-	panel.position = Vector2(menu_x, menu_y + top_panel_height + screen_panel_gap)
+	panel.position = menu_position + Vector2(0.0, top_panel_height + screen_panel_gap)
+
+
+func _on_inventory_menu_drag_handle_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mouse_button := event as InputEventMouseButton
+		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
+			_inventory_menu_dragging = true
+			_inventory_menu_has_custom_position = true
+			_inventory_menu_position = _get_inventory_menu_position()
+			_inventory_menu_drag_offset = get_viewport().get_mouse_position() - _inventory_menu_position
+			get_viewport().set_input_as_handled()
+
+
+func _move_inventory_menu_to_mouse() -> void:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var metrics := _get_inventory_menu_metrics()
+	_inventory_menu_position = _clamp_inventory_menu_position(
+		get_viewport().get_mouse_position() - _inventory_menu_drag_offset,
+		float(metrics.get("width", 0.0)),
+		float(metrics.get("height", 0.0)),
+		viewport_size
+	)
+	_apply_inventory_menu_position(_inventory_menu_position)
+
+
+func _apply_inventory_menu_position(menu_position: Vector2) -> void:
+	_inventory_menu_has_custom_position = true
+	_inventory_menu_position = menu_position
+	var metrics := _get_inventory_menu_metrics()
+	var top_panel_height := float(metrics.get("top_height", player_menu_panel_height))
+	var menu_width := float(metrics.get("width", panel.size.x * panel.scale.x))
+
+	if is_instance_valid(_gear_panel):
+		_gear_panel.position = menu_position
+		_gear_panel.size = Vector2(menu_width, player_menu_panel_height)
+
+	if is_instance_valid(_external_panel):
+		_external_panel.position = menu_position
+		_external_panel.size = Vector2(menu_width, container_panel_height)
+
+	panel.position = menu_position + Vector2(0.0, top_panel_height + screen_panel_gap)
+
+
+func _get_inventory_menu_position() -> Vector2:
+	if _external_inventory_visible and is_instance_valid(_external_panel):
+		return _external_panel.position
+	if is_instance_valid(_gear_panel):
+		return _gear_panel.position
+
+	var metrics := _get_inventory_menu_metrics()
+	return panel.position - Vector2(0.0, float(metrics.get("top_height", player_menu_panel_height)) + screen_panel_gap)
+
+
+func _get_inventory_menu_metrics() -> Dictionary:
+	var scaled_panel_size := panel.size * panel.scale
+	var top_panel_height := container_panel_height if _external_inventory_visible else player_menu_panel_height
+	return {
+		"width": scaled_panel_size.x,
+		"height": top_panel_height + screen_panel_gap + scaled_panel_size.y,
+		"top_height": top_panel_height,
+	}
+
+
+func _clamp_inventory_menu_position(
+	target_position: Vector2,
+	menu_width: float,
+	total_height: float,
+	viewport_size: Vector2
+) -> Vector2:
+	var margin := screen_margin
+	return Vector2(
+		clampf(target_position.x, margin, maxf(margin, viewport_size.x - menu_width - margin)),
+		clampf(target_position.y, margin, maxf(margin, viewport_size.y - total_height - margin))
+	)
 
 
 func _refresh_status_panel() -> void:
@@ -599,10 +702,6 @@ func _refresh_status_panel() -> void:
 		float(_player.get("max_stamina")),
 		bool(_player.get("is_stamina_overheated")),
 		true
-	)
-	_on_player_ammo_changed(
-		int(_player.get("current_ammo")),
-		int(_player.get("reserve_ammo"))
 	)
 
 
