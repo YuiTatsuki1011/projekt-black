@@ -60,7 +60,6 @@ const MAGAZINE_LOAD_INDICATOR_SCRIPT := preload("res://scripts/ui/magazine_load_
 @export var player_menu_panel_height: float = 166.0
 @export var container_panel_height: float = 250.0
 @export var inventory_magazine_load_time_per_round: float = 0.22
-@export var inventory_magazine_check_time: float = 0.5
 
 @onready var root: Control = $Root
 @onready var shade: ColorRect = $Root/Shade
@@ -141,8 +140,6 @@ var _magazine_load_job: Dictionary = {}
 var _magazine_load_elapsed: float = 0.0
 var _magazine_load_rounds_total: int = 0
 var _magazine_load_rounds_done: int = 0
-var _magazine_check_job: Dictionary = {}
-var _magazine_check_elapsed: float = 0.0
 
 
 func _ready() -> void:
@@ -449,7 +446,6 @@ func set_inventory_open(is_open: bool) -> void:
 		_refresh_status_panel()
 	else:
 		_cancel_magazine_load_job()
-		_cancel_magazine_check_job()
 		_cancel_drag()
 		_hide_detail_panel()
 		_hide_context_menu()
@@ -559,7 +555,6 @@ func _resolve_external_container_label(container: Node) -> String:
 
 func _process(delta: float) -> void:
 	_update_magazine_load_job(delta)
-	_update_magazine_check_job(delta)
 	if _is_open:
 		_layout_realtime_inventory()
 		_refresh_status_panel()
@@ -967,9 +962,6 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			else:
 				_show_item_context_menu(_inventory, entry_id, DRAG_SOURCE_INVENTORY)
 			get_viewport().set_input_as_handled()
-		elif mouse_button.button_index == MOUSE_BUTTON_MIDDLE and mouse_button.pressed:
-			_start_magazine_check_job(_inventory, entry_id)
-			get_viewport().set_input_as_handled()
 
 
 func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
@@ -993,9 +985,6 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 				_quick_transfer_entry_between_inventories(_external_inventory, _inventory, entry_id)
 			else:
 				_show_item_context_menu(_external_inventory, entry_id, DRAG_SOURCE_EXTERNAL)
-			get_viewport().set_input_as_handled()
-		elif mouse_button.button_index == MOUSE_BUTTON_MIDDLE and mouse_button.pressed:
-			_start_magazine_check_job(_external_inventory, entry_id)
 			get_viewport().set_input_as_handled()
 
 
@@ -1877,7 +1866,6 @@ func _start_magazine_load_job(
 		return false
 
 	_cancel_magazine_load_job(false)
-	_cancel_magazine_check_job(false)
 	_magazine_load_job = {
 		"source_inventory": source_inventory,
 		"source_entry_id": ammo_entry_id,
@@ -1887,27 +1875,6 @@ func _start_magazine_load_job(
 	_magazine_load_elapsed = 0.0
 	_magazine_load_rounds_done = 0
 	_magazine_load_rounds_total = loadable_rounds
-	_hide_detail_panel()
-	_refresh()
-	_refresh_external_inventory()
-	return true
-
-
-func _start_magazine_check_job(target_inventory: Node, target_entry_id: int) -> bool:
-	if target_inventory == null or not target_inventory.has_method("get_magazine_entry_info"):
-		return false
-
-	var magazine_info: Dictionary = target_inventory.call("get_magazine_entry_info", target_entry_id)
-	if magazine_info.is_empty():
-		return false
-
-	_cancel_magazine_load_job(false)
-	_cancel_magazine_check_job(false)
-	_magazine_check_job = {
-		"target_inventory": target_inventory,
-		"target_entry_id": target_entry_id,
-	}
-	_magazine_check_elapsed = 0.0
 	_hide_detail_panel()
 	_refresh()
 	_refresh_external_inventory()
@@ -1952,34 +1919,6 @@ func _finish_magazine_load_job() -> void:
 	_refresh_external_inventory()
 
 
-func _update_magazine_check_job(delta: float) -> void:
-	if _magazine_check_job.is_empty():
-		return
-	if not _is_open:
-		_cancel_magazine_check_job(false)
-		return
-
-	var target_inventory := _magazine_check_job.get("target_inventory") as Node
-	var target_entry_id := int(_magazine_check_job.get("target_entry_id", -1))
-	if target_inventory == null or not target_inventory.has_method("set_magazine_entry_checked"):
-		_cancel_magazine_check_job()
-		return
-
-	_magazine_check_elapsed += delta
-	if _magazine_check_elapsed < maxf(inventory_magazine_check_time, 0.01):
-		return
-
-	target_inventory.call("set_magazine_entry_checked", target_entry_id, true)
-	_finish_magazine_check_job()
-
-
-func _finish_magazine_check_job() -> void:
-	_magazine_check_job.clear()
-	_magazine_check_elapsed = 0.0
-	_refresh()
-	_refresh_external_inventory()
-
-
 func _cancel_magazine_load_job(should_refresh: bool = true) -> void:
 	if _magazine_load_job.is_empty():
 		return
@@ -1993,17 +1932,6 @@ func _cancel_magazine_load_job(should_refresh: bool = true) -> void:
 		_refresh_external_inventory()
 
 
-func _cancel_magazine_check_job(should_refresh: bool = true) -> void:
-	if _magazine_check_job.is_empty():
-		return
-
-	_magazine_check_job.clear()
-	_magazine_check_elapsed = 0.0
-	if should_refresh:
-		_refresh()
-		_refresh_external_inventory()
-
-
 func _is_magazine_load_target(target_inventory: Node, entry_id: int) -> bool:
 	if _magazine_load_job.is_empty():
 		return false
@@ -2011,15 +1939,8 @@ func _is_magazine_load_target(target_inventory: Node, entry_id: int) -> bool:
 	return target_inventory == _magazine_load_job.get("target_inventory") and entry_id == int(_magazine_load_job.get("target_entry_id", -1))
 
 
-func _is_magazine_check_target(target_inventory: Node, entry_id: int) -> bool:
-	if _magazine_check_job.is_empty():
-		return false
-
-	return target_inventory == _magazine_check_job.get("target_inventory") and entry_id == int(_magazine_check_job.get("target_entry_id", -1))
-
-
 func _is_magazine_action_target(target_inventory: Node, entry_id: int) -> bool:
-	return _is_magazine_load_target(target_inventory, entry_id) or _is_magazine_check_target(target_inventory, entry_id)
+	return _is_magazine_load_target(target_inventory, entry_id)
 
 
 func _get_magazine_load_progress() -> float:
@@ -2031,15 +1952,8 @@ func _get_magazine_load_progress() -> float:
 	return clampf((float(_magazine_load_rounds_done) + partial_round) / float(_magazine_load_rounds_total), 0.0, 1.0)
 
 
-func _get_magazine_check_progress() -> float:
-	if _magazine_check_job.is_empty():
-		return 0.0
-
-	return clampf(_magazine_check_elapsed / maxf(inventory_magazine_check_time, 0.01), 0.0, 1.0)
-
-
 func _add_magazine_load_indicator_if_needed(item_panel: Control, target_inventory: Node, entry_id: int) -> void:
-	if not _is_magazine_load_target(target_inventory, entry_id) and not _is_magazine_check_target(target_inventory, entry_id):
+	if not _is_magazine_load_target(target_inventory, entry_id):
 		return
 
 	var indicator := MAGAZINE_LOAD_INDICATOR_SCRIPT.new() as Control
@@ -2049,14 +1963,12 @@ func _add_magazine_load_indicator_if_needed(item_panel: Control, target_inventor
 	indicator.offset_top = 0.0
 	indicator.offset_right = 0.0
 	indicator.offset_bottom = 0.0
-	var progress := _get_magazine_load_progress() if _is_magazine_load_target(target_inventory, entry_id) else _get_magazine_check_progress()
-	indicator.set("progress", progress)
+	indicator.set("progress", _get_magazine_load_progress())
 	item_panel.add_child(indicator)
 
 
 func _update_magazine_load_indicator() -> void:
 	_update_magazine_indicator_for_job(_magazine_load_job, true)
-	_update_magazine_indicator_for_job(_magazine_check_job, false)
 
 
 func _update_magazine_indicator_for_job(job: Dictionary, is_load_job: bool) -> void:
@@ -2074,7 +1986,7 @@ func _update_magazine_indicator_for_job(job: Dictionary, is_load_job: bool) -> v
 		_add_magazine_load_indicator_if_needed(item_panel, target_inventory, target_entry_id)
 		indicator = item_panel.get_node_or_null("MagazineLoadIndicator") as Control
 	if indicator != null:
-		indicator.set("progress", _get_magazine_load_progress() if is_load_job else _get_magazine_check_progress())
+		indicator.set("progress", _get_magazine_load_progress() if is_load_job else 0.0)
 
 
 func _get_item_panel_for_inventory(target_inventory: Node, entry_id: int) -> Control:
@@ -2101,8 +2013,6 @@ func _show_item_context_menu(target_inventory: Node, entry_id: int, source: Stri
 	var actions: Array[Dictionary] = []
 	if _can_inspect_entry(target_inventory, entry_id):
 		actions.append({"label": "Inspect", "action": &"inspect"})
-	if _can_check_magazine_entry(target_inventory, entry_id):
-		actions.append({"label": "残弾の確認", "action": &"check_magazine"})
 	if _can_split_stack_entry(target_inventory, entry_id):
 		actions.append({"label": "Split", "action": &"split"})
 	var opposite_inventory := _get_opposite_inventory_for_source(source)
@@ -2145,8 +2055,6 @@ func _show_item_context_menu(target_inventory: Node, entry_id: int, source: Stri
 		button.disabled = action_name == &"none"
 		if action_name == &"inspect":
 			button.pressed.connect(Callable(self, "_on_context_inspect_entry_pressed").bind(target_inventory, entry_id))
-		elif action_name == &"check_magazine":
-			button.pressed.connect(Callable(self, "_on_context_check_magazine_pressed").bind(target_inventory, entry_id))
 		elif action_name == &"split":
 			button.pressed.connect(Callable(self, "_on_context_split_pressed").bind(target_inventory, entry_id))
 		elif action_name == &"transfer":
@@ -2177,12 +2085,6 @@ func _on_context_inspect_entry_pressed(target_inventory: Node, entry_id: int) ->
 	_hide_context_menu()
 	_hide_split_dialog()
 	_show_weapon_inspect_for_entry(target_inventory, entry_id)
-
-
-func _on_context_check_magazine_pressed(target_inventory: Node, entry_id: int) -> void:
-	_hide_context_menu()
-	_hide_split_dialog()
-	_start_magazine_check_job(target_inventory, entry_id)
 
 
 func _on_context_split_pressed(target_inventory: Node, entry_id: int) -> void:
@@ -2404,14 +2306,6 @@ func _can_split_stack_entry(target_inventory: Node, entry_id: int) -> bool:
 	var item_id: StringName = entry.get("item_id", &"")
 	var definition: Dictionary = _get_item_definition_for_inventory(target_inventory, item_id)
 	return bool(definition.get("stackable", false)) and int(entry.get("quantity", 1)) > 1
-
-
-func _can_check_magazine_entry(target_inventory: Node, entry_id: int) -> bool:
-	if target_inventory == null or not target_inventory.has_method("get_magazine_entry_info"):
-		return false
-
-	var info: Dictionary = target_inventory.call("get_magazine_entry_info", entry_id)
-	return not info.is_empty()
 
 
 func _can_inspect_entry(target_inventory: Node, entry_id: int) -> bool:
@@ -2718,17 +2612,13 @@ func _get_ranged_weapon_part_slots(weapon: Resource, equipment_slot: StringName)
 	var magazine_metadata := {}
 	if _is_active_firearm_slot(equipment_slot) and _player != null:
 		if bool(_player.call("has_active_magazine_inserted")):
-			var is_checked := bool(_player.call("is_loaded_ammo_checked"))
 			magazine_item_id = magazine_id
 			magazine_metadata = _player.call("get_active_magazine_metadata")
-			if is_checked:
-				magazine_line = "%s\n%d/%d" % [
-					magazine_name,
-					int(_player.get("magazine_ammo")),
-					int(_player.get("magazine_size")),
-				]
-			else:
-				magazine_line = "%s\n?" % magazine_name
+			magazine_line = "%s\n%d/%d" % [
+				magazine_name,
+				int(_player.get("magazine_ammo")),
+				int(_player.get("magazine_size")),
+			]
 		else:
 			magazine_line = "Empty"
 
@@ -2738,13 +2628,10 @@ func _get_ranged_weapon_part_slots(weapon: Resource, equipment_slot: StringName)
 		var chamber_count := int(_player.get("chamber_ammo"))
 		if chamber_count > 0:
 			chamber_item_id = StringName(_player.get("ammo_item_id"))
-			if bool(_player.call("is_loaded_ammo_checked")):
-				chamber_line = "%d/%d" % [
-					chamber_count,
-					int(_player.get("chamber_size")),
-				]
-			else:
-				chamber_line = "?"
+			chamber_line = "%d/%d" % [
+				chamber_count,
+				int(_player.get("chamber_size")),
+			]
 		else:
 			chamber_line = "Empty"
 
@@ -4139,14 +4026,12 @@ func _populate_generic_item_details(
 	_add_detail_stat_row("Grid Size", "%dx%d" % [item_size.x, item_size.y])
 	if StringName(definition.get("type", &"")) == &"magazine":
 		var capacity := int(definition.get("magazine_capacity", metadata.get("capacity", 0)))
-		var is_checked := bool(metadata.get("is_checked", false))
 		var ammo_count := int(metadata.get("ammo_count", 0))
-		var rounds_text := "%d / %d" % [ammo_count, capacity] if is_checked else "? / %d" % capacity
-		_add_detail_stat_row("Rounds", rounds_text)
+		_add_detail_stat_row("Rounds", "%d / %d" % [ammo_count, capacity])
 		var ammo_id := StringName(definition.get("ammo_item_id", metadata.get("ammo_item_id", &"")))
 		if ammo_id != &"":
 			var ammo_definition: Dictionary = _inventory.get_item_definition(ammo_id)
-			_add_detail_stat_row("Ammo", str(ammo_definition.get("name", ammo_id)) if is_checked else "?")
+			_add_detail_stat_row("Ammo", str(ammo_definition.get("name", ammo_id)))
 	_add_detail_stat_row("Stackable", "Yes" if bool(definition.get("stackable", false)) else "No")
 	if bool(definition.get("stackable", false)):
 		_add_detail_stat_row("Max Stack", str(int(definition.get("max_stack", quantity))))
@@ -4353,8 +4238,6 @@ func _get_item_label(
 	var item_name: String = str(definition.get("short_name", definition.get("name", "Item")))
 	if StringName(definition.get("type", &"")) == &"magazine" and metadata.has("ammo_count"):
 		var capacity := int(definition.get("magazine_capacity", metadata.get("capacity", 0)))
-		if not bool(metadata.get("is_checked", false)):
-			return "%s\n?" % item_name
 		if capacity > 0:
 			return "%s\n%d/%d" % [item_name, int(metadata.get("ammo_count", 0)), capacity]
 		return "%s\n%d" % [item_name, int(metadata.get("ammo_count", 0))]

@@ -5,8 +5,6 @@ signal ammo_changed(current_ammo: int, reserve_ammo: int)
 signal fired(ammo_remaining: int)
 signal reload_started(duration: float)
 signal chambering_started(duration: float)
-signal loaded_magazine_check_started(duration: float)
-signal loaded_magazine_check_finished(succeeded: bool)
 signal magazine_status_changed(magazines: Array, loading_entry_id: int, loading_progress: float, is_loading: bool)
 signal interact_requested
 signal died
@@ -39,8 +37,6 @@ enum MeleeState {
 @export var starting_spare_magazines: int = 3
 @export var reload_time: float = 1.2
 @export var chamber_feed_time: float = 0.5
-@export var reload_hold_check_threshold: float = 0.28
-@export var loaded_magazine_check_time: float = 0.5
 @export var field_magazine_load_time_per_round: float = 0.28
 @export var field_load_speed_multiplier: float = 0.72
 @export var fire_cooldown: float = 0.22
@@ -103,11 +99,6 @@ var _reload_remaining: float = 0.0
 var _is_reloading: bool = false
 var _chambering_remaining: float = 0.0
 var _is_chambering: bool = false
-var _reload_input_is_held: bool = false
-var _reload_hold_elapsed: float = 0.0
-var _reload_hold_started_check: bool = false
-var _loaded_magazine_check_remaining: float = 0.0
-var _is_checking_loaded_magazine: bool = false
 var _is_field_magazine_loading: bool = false
 var _field_magazine_load_elapsed: float = 0.0
 var _field_magazine_load_entry_id: int = -1
@@ -144,7 +135,6 @@ var _firearm_magazine_rounds_by_slot: Dictionary = {}
 var _firearm_chamber_rounds_by_slot: Dictionary = {}
 var _firearm_has_magazine_by_slot: Dictionary = {}
 var _firearm_magazine_item_id_by_slot: Dictionary = {}
-var _firearm_loaded_ammo_checked_by_slot: Dictionary = {}
 var _firearm_slot_input_was_pressed: Array[bool] = [false, false, false, false]
 var _is_sub_weapon_aiming: bool = false
 var _sub_weapon_fire_was_pressed: bool = false
@@ -214,11 +204,6 @@ func _apply_ranged_weapon_stats(ranged_weapon: Resource) -> void:
 	starting_spare_magazines = int(_get_resource_value(ranged_weapon, &"starting_spare_magazines", starting_spare_magazines))
 	reload_time = float(_get_resource_value(ranged_weapon, &"reload_time", reload_time))
 	chamber_feed_time = float(_get_resource_value(ranged_weapon, &"chamber_feed_time", chamber_feed_time))
-	loaded_magazine_check_time = float(_get_resource_value(
-		ranged_weapon,
-		&"loaded_magazine_check_time",
-		loaded_magazine_check_time
-	))
 	field_magazine_load_time_per_round = float(_get_resource_value(
 		ranged_weapon,
 		&"field_magazine_load_time_per_round",
@@ -255,7 +240,6 @@ func _clear_ranged_weapon_stats() -> void:
 	starting_spare_magazines = 0
 	reload_time = 0.0
 	chamber_feed_time = 0.0
-	loaded_magazine_check_time = 0.0
 	field_magazine_load_time_per_round = 0.0
 	fire_cooldown = 0.0
 	recoil_amount = 0.0
@@ -324,6 +308,21 @@ func _get_weapon_id(weapon: Resource) -> StringName:
 	return StringName(str(weapon.get("weapon_id")))
 
 
+func _get_weapon_display_name(weapon: Resource) -> String:
+	if weapon == null:
+		return ""
+
+	var display_name: Variant = weapon.get("display_name")
+	if display_name != null and not str(display_name).is_empty():
+		return str(display_name)
+
+	return str(_get_weapon_id(weapon))
+
+
+func _get_active_firearm_display_name() -> String:
+	return _get_weapon_display_name(_get_equipped_firearm_for_slot(_active_firearm_slot))
+
+
 func _get_weapon_magazine_size(weapon: Resource) -> int:
 	if weapon == null:
 		return 0
@@ -358,7 +357,6 @@ func _sync_firearm_slot_cache(slot: StringName) -> void:
 		_firearm_chamber_rounds_by_slot.erase(slot)
 		_firearm_has_magazine_by_slot.erase(slot)
 		_firearm_magazine_item_id_by_slot.erase(slot)
-		_firearm_loaded_ammo_checked_by_slot.erase(slot)
 		return
 
 	var weapon_id := _get_weapon_id(weapon)
@@ -370,7 +368,6 @@ func _sync_firearm_slot_cache(slot: StringName) -> void:
 	_firearm_chamber_rounds_by_slot[slot] = 1 if _get_weapon_chamber_size(weapon) > 0 else 0
 	_firearm_has_magazine_by_slot[slot] = _get_weapon_magazine_size(weapon) > 0
 	_firearm_magazine_item_id_by_slot[slot] = _get_weapon_magazine_item_id(weapon)
-	_firearm_loaded_ammo_checked_by_slot[slot] = false
 
 
 func _save_active_firearm_ammo() -> void:
@@ -381,8 +378,6 @@ func _save_active_firearm_ammo() -> void:
 	_firearm_chamber_rounds_by_slot[_active_firearm_slot] = chamber_ammo
 	_firearm_has_magazine_by_slot[_active_firearm_slot] = _has_active_magazine_inserted()
 	_firearm_magazine_item_id_by_slot[_active_firearm_slot] = magazine_item_id
-	if not _firearm_loaded_ammo_checked_by_slot.has(_active_firearm_slot):
-		_firearm_loaded_ammo_checked_by_slot[_active_firearm_slot] = false
 
 
 func _load_active_firearm_ammo() -> void:
@@ -402,8 +397,6 @@ func _load_active_firearm_ammo() -> void:
 		_firearm_has_magazine_by_slot[_active_firearm_slot] = magazine_size > 0
 	if not _firearm_magazine_item_id_by_slot.has(_active_firearm_slot):
 		_firearm_magazine_item_id_by_slot[_active_firearm_slot] = magazine_item_id
-	if not _firearm_loaded_ammo_checked_by_slot.has(_active_firearm_slot):
-		_firearm_loaded_ammo_checked_by_slot[_active_firearm_slot] = false
 
 	magazine_ammo = clampi(int(_firearm_magazine_rounds_by_slot.get(_active_firearm_slot, magazine_size)), 0, magazine_size)
 	chamber_ammo = clampi(int(_firearm_chamber_rounds_by_slot.get(_active_firearm_slot, 0)), 0, chamber_size)
@@ -422,8 +415,6 @@ func _on_equipment_changed(slot: StringName) -> void:
 		_load_active_firearm_ammo()
 		_is_reloading = false
 		_reload_remaining = 0.0
-		_cancel_reload_hold()
-		_cancel_loaded_magazine_check()
 		_cancel_chambering()
 		_cancel_field_magazine_loading()
 		_sync_reserve_ammo()
@@ -478,8 +469,6 @@ func _update_timers(delta: float) -> void:
 		if _chambering_remaining <= 0.0:
 			_finish_chambering()
 
-	_update_reload_hold(delta)
-	_update_loaded_magazine_check(delta)
 	_update_field_magazine_loading(delta)
 
 
@@ -543,8 +532,6 @@ func _handle_actions() -> void:
 
 	if Input.is_action_just_pressed("dodge"):
 		_cancel_field_magazine_loading()
-		_cancel_loaded_magazine_check()
-		_cancel_reload_hold()
 		_try_start_dodge()
 
 	_handle_firearm_slot_inputs()
@@ -563,8 +550,6 @@ func _handle_actions() -> void:
 
 	if sub_weapon_modifier_pressed and sub_weapon_fire_just_pressed:
 		_cancel_field_magazine_loading()
-		_cancel_loaded_magazine_check()
-		_cancel_reload_hold()
 		_handle_melee_input()
 
 	if _is_dodging or _melee_state != MeleeState.READY:
@@ -578,93 +563,13 @@ func _handle_actions() -> void:
 
 	if not sub_weapon_modifier_pressed and fire_pressed:
 		_cancel_field_magazine_loading()
-		_cancel_reload_hold()
-		_cancel_loaded_magazine_check()
 		_try_fire()
 
 
 func _handle_reload_input() -> void:
 	if Input.is_action_just_pressed("reload"):
-		_begin_reload_hold()
-
-	if Input.is_action_just_released("reload"):
-		_finish_reload_hold()
-
-
-func _begin_reload_hold() -> void:
-	if _is_reloading or _is_chambering or _is_checking_loaded_magazine:
-		return
-
-	_reload_input_is_held = true
-	_reload_hold_elapsed = 0.0
-	_reload_hold_started_check = false
-
-
-func _finish_reload_hold() -> void:
-	if not _reload_input_is_held:
-		return
-
-	var should_reload := not _reload_hold_started_check
-	_cancel_reload_hold()
-	if should_reload:
 		_cancel_field_magazine_loading()
 		_start_reload()
-
-
-func _cancel_reload_hold() -> void:
-	_reload_input_is_held = false
-	_reload_hold_elapsed = 0.0
-	_reload_hold_started_check = false
-
-
-func _update_reload_hold(delta: float) -> void:
-	if not _reload_input_is_held or _reload_hold_started_check:
-		return
-
-	_reload_hold_elapsed += delta
-	if _reload_hold_elapsed < reload_hold_check_threshold:
-		return
-
-	_reload_hold_started_check = true
-	_cancel_field_magazine_loading()
-	_start_loaded_magazine_check()
-
-
-func _start_loaded_magazine_check() -> bool:
-	if not _has_ranged_weapon or _is_reloading or _is_chambering:
-		return false
-	if not _has_active_magazine_inserted() and chamber_ammo <= 0:
-		return false
-
-	_is_checking_loaded_magazine = true
-	_loaded_magazine_check_remaining = maxf(loaded_magazine_check_time, 0.01)
-	loaded_magazine_check_started.emit(_loaded_magazine_check_remaining)
-	return true
-
-
-func _update_loaded_magazine_check(delta: float) -> void:
-	if not _is_checking_loaded_magazine:
-		return
-
-	_loaded_magazine_check_remaining -= delta
-	if _loaded_magazine_check_remaining > 0.0:
-		return
-
-	_is_checking_loaded_magazine = false
-	_loaded_magazine_check_remaining = 0.0
-	_set_loaded_ammo_checked(true, false)
-	ammo_changed.emit(current_ammo, reserve_ammo)
-	_emit_magazine_status_changed()
-	loaded_magazine_check_finished.emit(true)
-
-
-func _cancel_loaded_magazine_check() -> void:
-	if not _is_checking_loaded_magazine:
-		return
-
-	_is_checking_loaded_magazine = false
-	_loaded_magazine_check_remaining = 0.0
-	loaded_magazine_check_finished.emit(false)
 
 
 func _handle_firearm_slot_inputs() -> void:
@@ -805,7 +710,7 @@ func get_active_magazine_statuses() -> Array:
 			"ammo_name": _get_item_display_name(ammo_item_id),
 			"ammo_count": magazine_ammo,
 			"capacity": magazine_size,
-			"is_checked": is_loaded_ammo_checked(),
+			"is_checked": true,
 			"is_active_magazine": true,
 			"chamber_ammo": chamber_ammo,
 			"total_loaded_ammo": current_ammo,
@@ -813,7 +718,11 @@ func get_active_magazine_statuses() -> Array:
 		})
 
 	if inventory != null and inventory.has_method("get_magazine_entries"):
-		statuses.append_array(inventory.call("get_magazine_entries", magazine_item_id, ammo_item_id))
+		var inventory_magazines: Array = inventory.call("get_magazine_entries", magazine_item_id, ammo_item_id)
+		for magazine in inventory_magazines:
+			var normalized: Dictionary = magazine.duplicate(true)
+			normalized["is_checked"] = true
+			statuses.append(normalized)
 
 	return statuses
 
@@ -823,7 +732,7 @@ func get_loaded_ammo_detail() -> Dictionary:
 		return {}
 
 	return {
-		"is_checked": is_loaded_ammo_checked(),
+		"is_checked": true,
 		"has_magazine": _has_active_magazine_inserted(),
 		"magazine_ammo": magazine_ammo if _has_active_magazine_inserted() else 0,
 		"magazine_capacity": magazine_size if _has_active_magazine_inserted() else 0,
@@ -832,6 +741,23 @@ func get_loaded_ammo_detail() -> Dictionary:
 		"total_loaded_ammo": current_ammo,
 		"ammo_item_id": ammo_item_id,
 		"ammo_name": _get_item_display_name(ammo_item_id),
+	}
+
+
+func get_firearm_hud_info() -> Dictionary:
+	if not _has_ranged_weapon:
+		return {
+			"weapon_name": "No Firearm",
+			"current_loaded_ammo": 0,
+			"max_loaded_ammo": 0,
+			"magazine_count": 0,
+		}
+
+	return {
+		"weapon_name": _get_active_firearm_display_name(),
+		"current_loaded_ammo": current_ammo,
+		"max_loaded_ammo": magazine_size + chamber_size,
+		"magazine_count": get_active_magazine_statuses().size(),
 	}
 
 
@@ -924,7 +850,6 @@ func _start_reload() -> void:
 	if _is_reloading or _is_chambering:
 		return
 
-	_cancel_loaded_magazine_check()
 	if _can_chamber_from_magazine():
 		_start_chambering()
 		return
@@ -961,7 +886,6 @@ func _finish_reload() -> void:
 	magazine_ammo = _get_magazine_rounds_from_metadata(next_metadata, next_magazine_entry.get("item_id", magazine_item_id))
 	magazine_item_id = next_magazine_entry.get("item_id", magazine_item_id)
 	_firearm_has_magazine_by_slot[_active_firearm_slot] = true
-	_set_loaded_ammo_checked(bool(next_metadata.get("is_checked", false)), false)
 	_update_current_ammo_from_loaded_parts()
 	_save_active_firearm_ammo()
 	_suppress_inventory_ammo_signal = false
@@ -1332,7 +1256,6 @@ func _consume_round() -> void:
 		return
 
 	_feed_chamber_if_empty()
-	_set_loaded_ammo_checked(false, false)
 	_update_current_ammo_from_loaded_parts()
 	_save_active_firearm_ammo()
 	_fire_cooldown_remaining = fire_cooldown
@@ -1370,7 +1293,6 @@ func _start_chambering() -> bool:
 	if not _can_chamber_from_magazine():
 		return false
 
-	_cancel_loaded_magazine_check()
 	if chamber_feed_time <= 0.0:
 		_finish_chambering()
 		return true
@@ -1386,7 +1308,6 @@ func _finish_chambering() -> void:
 	_chambering_remaining = 0.0
 	if _can_chamber_from_magazine():
 		_feed_chamber_if_empty()
-		_set_loaded_ammo_checked(false, false)
 	_commit_loaded_ammo_change()
 
 
@@ -1399,27 +1320,18 @@ func _has_active_magazine_inserted() -> bool:
 	return bool(_firearm_has_magazine_by_slot.get(_active_firearm_slot, magazine_size > 0))
 
 
-func _set_loaded_ammo_checked(is_checked: bool, should_emit: bool = true) -> void:
-	if _active_firearm_slot == &"":
-		return
-
-	_firearm_loaded_ammo_checked_by_slot[_active_firearm_slot] = is_checked
-	if should_emit:
-		ammo_changed.emit(current_ammo, reserve_ammo)
-
-
 func has_active_magazine_inserted() -> bool:
 	return _has_active_magazine_inserted()
 
 
 func is_loaded_ammo_checked() -> bool:
-	return bool(_firearm_loaded_ammo_checked_by_slot.get(_active_firearm_slot, false))
+	return _has_ranged_weapon
 
 
 func get_current_ammo_display() -> String:
 	if not _has_ranged_weapon:
 		return "--"
-	return str(current_ammo) if is_loaded_ammo_checked() else "?"
+	return str(current_ammo)
 
 
 func get_reserve_ammo_display() -> String:
@@ -1432,10 +1344,6 @@ func get_reserve_ammo_display() -> String:
 	var magazines: Array = inventory.call("get_magazine_entries", magazine_item_id, ammo_item_id)
 	if magazines.is_empty():
 		return "0"
-
-	for magazine in magazines:
-		if not bool(magazine.get("is_checked", false)):
-			return "?"
 
 	return str(reserve_ammo)
 
@@ -1470,7 +1378,6 @@ func insert_active_magazine(item_id: StringName, metadata: Dictionary = {}) -> b
 	magazine_ammo = _get_magazine_rounds_from_metadata(metadata, item_id)
 	magazine_item_id = item_id
 	_firearm_has_magazine_by_slot[_active_firearm_slot] = true
-	_set_loaded_ammo_checked(bool(metadata.get("is_checked", false)), false)
 	_commit_loaded_ammo_change()
 	return true
 
@@ -1486,7 +1393,6 @@ func eject_active_magazine() -> Dictionary:
 	}
 	magazine_ammo = 0
 	_firearm_has_magazine_by_slot[_active_firearm_slot] = false
-	_set_loaded_ammo_checked(false, false)
 	_commit_loaded_ammo_change()
 	return ejected
 
@@ -1501,7 +1407,6 @@ func insert_chamber_round(item_id: StringName) -> bool:
 
 	_cancel_chambering()
 	chamber_ammo += 1
-	_set_loaded_ammo_checked(true, false)
 	_commit_loaded_ammo_change()
 	return true
 
@@ -1512,7 +1417,6 @@ func eject_chamber_round() -> Dictionary:
 
 	_cancel_chambering()
 	chamber_ammo -= 1
-	_set_loaded_ammo_checked(false, false)
 	var ejected := {
 		"item_id": ammo_item_id,
 		"quantity": 1,
@@ -1566,7 +1470,7 @@ func _get_magazine_rounds_from_metadata(metadata: Dictionary, item_id: StringNam
 	return clampi(rounds, 0, capacity)
 
 
-func _make_magazine_metadata(rounds: int, is_checked: bool = false) -> Dictionary:
+func _make_magazine_metadata(rounds: int, is_checked: bool = true) -> Dictionary:
 	return {
 		"ammo_count": clampi(rounds, 0, magazine_size),
 		"capacity": magazine_size,

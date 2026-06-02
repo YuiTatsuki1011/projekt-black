@@ -16,7 +16,6 @@ chamber_size = 1
 starting_spare_magazines = 0
 reload_time = 1.45
 chamber_feed_time = 0.5
-loaded_magazine_check_time = 0.5
 field_magazine_load_time_per_round = 0.28
 fire_cooldown = 0.36
 recoil_amount = 0.28
