@@ -5,6 +5,7 @@ signal ammo_changed(current_ammo: int, reserve_ammo: int)
 signal fired(ammo_remaining: int)
 signal reload_started(duration: float)
 signal chambering_started(duration: float)
+signal magazine_status_changed(magazines: Array, loading_entry_id: int, loading_progress: float, is_loading: bool)
 signal interact_requested
 signal died
 signal stamina_changed(current_stamina: float, max_stamina: float, overheated: bool, melee_available: bool)
@@ -35,6 +36,8 @@ enum MeleeState {
 @export var starting_spare_magazines: int = 3
 @export var reload_time: float = 1.2
 @export var chamber_feed_time: float = 0.5
+@export var field_magazine_load_time_per_round: float = 0.28
+@export var field_load_speed_multiplier: float = 0.72
 @export var fire_cooldown: float = 0.22
 @export var recoil_amount: float = 0.18
 @export var recoil_recovery_speed: float = 8.0
@@ -95,6 +98,11 @@ var _reload_remaining: float = 0.0
 var _is_reloading: bool = false
 var _chambering_remaining: float = 0.0
 var _is_chambering: bool = false
+var _is_field_magazine_loading: bool = false
+var _field_magazine_load_elapsed: float = 0.0
+var _field_magazine_load_entry_id: int = -1
+var _field_magazine_load_ammo_entry_id: int = -1
+var _field_load_input_was_pressed: bool = false
 var _is_crouching: bool = false
 var _is_dead: bool = false
 var _is_inventory_open: bool = false
@@ -158,6 +166,7 @@ func _ready() -> void:
 	_set_melee_visual(false)
 	_update_arm_anchor()
 	ammo_changed.emit(current_ammo, reserve_ammo)
+	_emit_magazine_status_changed()
 	_emit_stamina_changed()
 
 
@@ -194,6 +203,11 @@ func _apply_ranged_weapon_stats(ranged_weapon: Resource) -> void:
 	starting_spare_magazines = int(_get_resource_value(ranged_weapon, &"starting_spare_magazines", starting_spare_magazines))
 	reload_time = float(_get_resource_value(ranged_weapon, &"reload_time", reload_time))
 	chamber_feed_time = float(_get_resource_value(ranged_weapon, &"chamber_feed_time", chamber_feed_time))
+	field_magazine_load_time_per_round = float(_get_resource_value(
+		ranged_weapon,
+		&"field_magazine_load_time_per_round",
+		field_magazine_load_time_per_round
+	))
 	fire_cooldown = float(_get_resource_value(ranged_weapon, &"fire_cooldown", fire_cooldown))
 	recoil_amount = float(_get_resource_value(ranged_weapon, &"recoil_amount", recoil_amount))
 	recoil_recovery_speed = float(_get_resource_value(ranged_weapon, &"recoil_recovery_speed", recoil_recovery_speed))
@@ -225,6 +239,7 @@ func _clear_ranged_weapon_stats() -> void:
 	starting_spare_magazines = 0
 	reload_time = 0.0
 	chamber_feed_time = 0.0
+	field_magazine_load_time_per_round = 0.0
 	fire_cooldown = 0.0
 	recoil_amount = 0.0
 	_recoil = 0.0
@@ -355,6 +370,7 @@ func _load_active_firearm_ammo() -> void:
 		magazine_ammo = 0
 		chamber_ammo = 0
 		_cancel_chambering()
+		_cancel_field_magazine_loading()
 		return
 
 	if not _firearm_magazine_rounds_by_slot.has(_active_firearm_slot):
@@ -384,7 +400,9 @@ func _on_equipment_changed(slot: StringName) -> void:
 		_is_reloading = false
 		_reload_remaining = 0.0
 		_cancel_chambering()
+		_cancel_field_magazine_loading()
 		_sync_reserve_ammo()
+		_emit_magazine_status_changed()
 
 	if slot == &"melee":
 		_melee_combo_step = 0
@@ -435,6 +453,8 @@ func _update_timers(delta: float) -> void:
 		if _chambering_remaining <= 0.0:
 			_finish_chambering()
 
+	_update_field_magazine_loading(delta)
+
 
 func _update_stamina(delta: float) -> void:
 	if is_stamina_overheated:
@@ -465,6 +485,8 @@ func _handle_movement(delta: float) -> void:
 		active_speed *= crouch_speed_multiplier
 	if _is_sub_weapon_aiming:
 		active_speed *= sub_weapon_aim_speed_multiplier
+	if _is_field_magazine_loading:
+		active_speed *= field_load_speed_multiplier
 
 	if _is_dodging:
 		velocity.x = float(_dodge_direction) * dodge_speed
@@ -490,7 +512,10 @@ func _handle_actions() -> void:
 	if _is_inventory_open:
 		return
 
+	_handle_field_magazine_load_input()
+
 	if Input.is_action_just_pressed("dodge"):
+		_cancel_field_magazine_loading()
 		_try_start_dodge()
 
 	_handle_firearm_slot_inputs()
@@ -508,6 +533,7 @@ func _handle_actions() -> void:
 	_sub_weapon_fire_was_pressed = fire_pressed
 
 	if sub_weapon_modifier_pressed and sub_weapon_fire_just_pressed:
+		_cancel_field_magazine_loading()
 		_handle_melee_input()
 
 	if _is_dodging or _melee_state != MeleeState.READY:
@@ -518,9 +544,11 @@ func _handle_actions() -> void:
 		interact_requested.emit()
 
 	if Input.is_action_just_pressed("reload"):
+		_cancel_field_magazine_loading()
 		_start_reload()
 
 	if not sub_weapon_modifier_pressed and fire_pressed:
+		_cancel_field_magazine_loading()
 		_try_fire()
 
 
@@ -536,6 +564,136 @@ func _handle_firearm_slot_inputs() -> void:
 		if is_pressed and not was_pressed:
 			equipment.call("select_firearm_slot", slot_index)
 			return
+
+
+func _handle_field_magazine_load_input() -> void:
+	var is_pressed := Input.is_action_pressed("field_load")
+	var just_pressed := is_pressed and not _field_load_input_was_pressed
+	_field_load_input_was_pressed = is_pressed
+	if not just_pressed:
+		return
+
+	if _is_field_magazine_loading:
+		_cancel_field_magazine_loading()
+	else:
+		_start_field_magazine_loading()
+
+
+func _start_field_magazine_loading() -> bool:
+	if _is_inventory_open or _is_reloading or _is_chambering or _is_dodging:
+		return false
+	if not _has_ranged_weapon:
+		return false
+	if not _refresh_field_magazine_load_entries():
+		_emit_magazine_status_changed()
+		return false
+
+	_is_field_magazine_loading = true
+	_field_magazine_load_elapsed = 0.0
+	_emit_magazine_status_changed()
+	return true
+
+
+func _update_field_magazine_loading(delta: float) -> void:
+	if not _is_field_magazine_loading:
+		return
+	if _is_inventory_open or _is_reloading or _is_chambering or _is_dodging:
+		_cancel_field_magazine_loading()
+		return
+
+	var per_round_time := maxf(field_magazine_load_time_per_round, 0.01)
+	_field_magazine_load_elapsed += delta
+	while _field_magazine_load_elapsed >= per_round_time:
+		if not _refresh_field_magazine_load_entries():
+			_cancel_field_magazine_loading()
+			return
+
+		if not bool(inventory.call(
+			"load_round_into_magazine",
+			_field_magazine_load_entry_id,
+			inventory,
+			_field_magazine_load_ammo_entry_id
+		)):
+			_cancel_field_magazine_loading()
+			return
+
+		_field_magazine_load_elapsed -= per_round_time
+		if not _refresh_field_magazine_load_entries():
+			_cancel_field_magazine_loading()
+			return
+
+	_emit_magazine_status_changed()
+
+
+func _refresh_field_magazine_load_entries() -> bool:
+	if inventory == null or magazine_item_id == &"" or ammo_item_id == &"":
+		return false
+	if not inventory.has_method("get_first_ammo_entry_id") or not inventory.has_method("get_first_loadable_magazine_entry_id"):
+		return false
+
+	var ammo_entry_id := int(inventory.call("get_first_ammo_entry_id", ammo_item_id))
+	if ammo_entry_id < 0:
+		return false
+
+	var magazine_entry_id := int(inventory.call("get_first_loadable_magazine_entry_id", magazine_item_id, ammo_item_id))
+	if magazine_entry_id < 0:
+		return false
+
+	if not inventory.has_method("can_load_round_into_magazine"):
+		return false
+	if not bool(inventory.call("can_load_round_into_magazine", magazine_entry_id, inventory, ammo_entry_id)):
+		return false
+
+	_field_magazine_load_entry_id = magazine_entry_id
+	_field_magazine_load_ammo_entry_id = ammo_entry_id
+	return true
+
+
+func _cancel_field_magazine_loading() -> void:
+	if not _is_field_magazine_loading and _field_magazine_load_entry_id < 0:
+		return
+
+	_is_field_magazine_loading = false
+	_field_magazine_load_elapsed = 0.0
+	_field_magazine_load_entry_id = -1
+	_field_magazine_load_ammo_entry_id = -1
+	_emit_magazine_status_changed()
+
+
+func _get_field_magazine_load_progress() -> float:
+	if not _is_field_magazine_loading:
+		return 0.0
+
+	var per_round_time := maxf(field_magazine_load_time_per_round, 0.01)
+	return clampf(_field_magazine_load_elapsed / per_round_time, 0.0, 1.0)
+
+
+func _emit_magazine_status_changed() -> void:
+	magazine_status_changed.emit(
+		get_active_magazine_statuses(),
+		_field_magazine_load_entry_id if _is_field_magazine_loading else -1,
+		_get_field_magazine_load_progress(),
+		_is_field_magazine_loading
+	)
+
+
+func get_active_magazine_statuses() -> Array:
+	if inventory == null or not _has_ranged_weapon or not inventory.has_method("get_magazine_entries"):
+		return []
+
+	return inventory.call("get_magazine_entries", magazine_item_id, ammo_item_id)
+
+
+func get_field_magazine_loading_entry_id() -> int:
+	return _field_magazine_load_entry_id if _is_field_magazine_loading else -1
+
+
+func get_field_magazine_loading_progress() -> float:
+	return _get_field_magazine_load_progress()
+
+
+func is_field_magazine_loading() -> bool:
+	return _is_field_magazine_loading
 
 
 func _update_aim(delta: float) -> void:
@@ -943,6 +1101,7 @@ func set_inventory_open(is_open: bool) -> void:
 		_is_reloading = false
 		_reload_remaining = 0.0
 		_cancel_chambering()
+		_cancel_field_magazine_loading()
 		_set_sub_weapon_aim_visual(false)
 		if _melee_state != MeleeState.READY:
 			_cancel_melee_attack()
@@ -1293,10 +1452,12 @@ func _on_inventory_item_quantity_changed(item_id: StringName, _quantity: int) ->
 		return
 
 	_sync_reserve_ammo(not _suppress_inventory_ammo_signal)
+	_emit_magazine_status_changed()
 
 
 func _on_inventory_grid_changed() -> void:
 	_sync_reserve_ammo(not _suppress_inventory_ammo_signal)
+	_emit_magazine_status_changed()
 
 
 func _try_apply_close_barrel_hit() -> bool:

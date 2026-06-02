@@ -306,6 +306,123 @@ func get_entry_metadata(entry_id: int) -> Dictionary:
 	return Dictionary(_entries[entry_id].get("metadata", {})).duplicate(true)
 
 
+func get_magazine_entry_info(entry_id: int) -> Dictionary:
+	if not _entries.has(entry_id):
+		return {}
+
+	var entry: Dictionary = _entries[entry_id]
+	var item_id: StringName = entry.get("item_id", &"")
+	var definition: Dictionary = get_item_definition(item_id)
+	if StringName(definition.get("type", &"")) != &"magazine":
+		return {}
+
+	var metadata: Dictionary = entry.get("metadata", {})
+	var capacity: int = int(definition.get("magazine_capacity", 0))
+	if metadata.has("capacity"):
+		capacity = int(metadata.get("capacity", capacity))
+
+	var ammo_item_id := StringName(definition.get("ammo_item_id", &""))
+	if metadata.has("ammo_item_id"):
+		ammo_item_id = StringName(metadata.get("ammo_item_id", ammo_item_id))
+
+	var ammo_count := capacity
+	if metadata.has("ammo_count"):
+		ammo_count = int(metadata.get("ammo_count", 0))
+	ammo_count = clampi(ammo_count, 0, capacity)
+
+	return {
+		"entry_id": entry_id,
+		"item_id": item_id,
+		"ammo_item_id": ammo_item_id,
+		"ammo_count": ammo_count,
+		"capacity": capacity,
+		"position": entry.get("position", Vector2i.ZERO),
+	}
+
+
+func get_magazine_entries(magazine_item_id: StringName = &"", ammo_item_id: StringName = &"") -> Array[Dictionary]:
+	var entries := get_entries()
+	entries.sort_custom(Callable(self, "_compare_entries_by_grid_position"))
+
+	var magazine_entries: Array[Dictionary] = []
+	for entry in entries:
+		var entry_item_id: StringName = entry.get("item_id", &"")
+		if magazine_item_id != &"" and entry_item_id != magazine_item_id:
+			continue
+
+		var entry_id := int(entry.get("entry_id", -1))
+		var info := get_magazine_entry_info(entry_id)
+		if info.is_empty():
+			continue
+		if ammo_item_id != &"" and StringName(info.get("ammo_item_id", &"")) != ammo_item_id:
+			continue
+
+		magazine_entries.append(info)
+
+	return magazine_entries
+
+
+func get_first_loadable_magazine_entry_id(magazine_item_id: StringName, ammo_item_id: StringName) -> int:
+	for info in get_magazine_entries(magazine_item_id, ammo_item_id):
+		if int(info.get("ammo_count", 0)) < int(info.get("capacity", 0)):
+			return int(info.get("entry_id", -1))
+
+	return -1
+
+
+func get_first_ammo_entry_id(ammo_item_id: StringName) -> int:
+	var entries := get_entries()
+	entries.sort_custom(Callable(self, "_compare_entries_by_grid_position"))
+	for entry in entries:
+		if entry.get("item_id", &"") == ammo_item_id and int(entry.get("quantity", 0)) > 0:
+			return int(entry.get("entry_id", -1))
+
+	return -1
+
+
+func get_loadable_round_count(magazine_entry_id: int, ammo_inventory: Node, ammo_entry_id: int) -> int:
+	if ammo_inventory == null or not ammo_inventory.has_method("get_entry"):
+		return 0
+
+	var magazine_info := get_magazine_entry_info(magazine_entry_id)
+	if magazine_info.is_empty():
+		return 0
+
+	var ammo_entry: Dictionary = ammo_inventory.call("get_entry", ammo_entry_id)
+	if ammo_entry.is_empty():
+		return 0
+	if ammo_entry.get("item_id", &"") != magazine_info.get("ammo_item_id", &""):
+		return 0
+
+	var magazine_space := int(magazine_info.get("capacity", 0)) - int(magazine_info.get("ammo_count", 0))
+	return mini(maxi(magazine_space, 0), int(ammo_entry.get("quantity", 0)))
+
+
+func can_load_round_into_magazine(magazine_entry_id: int, ammo_inventory: Node, ammo_entry_id: int) -> bool:
+	return get_loadable_round_count(magazine_entry_id, ammo_inventory, ammo_entry_id) > 0
+
+
+func load_round_into_magazine(magazine_entry_id: int, ammo_inventory: Node, ammo_entry_id: int) -> bool:
+	if not can_load_round_into_magazine(magazine_entry_id, ammo_inventory, ammo_entry_id):
+		return false
+	if ammo_inventory == null or not ammo_inventory.has_method("remove_quantity_from_entry"):
+		return false
+
+	var removed_quantity: int = int(ammo_inventory.call("remove_quantity_from_entry", ammo_entry_id, 1))
+	if removed_quantity != 1:
+		return false
+
+	var magazine_info := get_magazine_entry_info(magazine_entry_id)
+	if magazine_info.is_empty():
+		return false
+
+	var metadata := get_entry_metadata(magazine_entry_id)
+	metadata["ammo_count"] = int(magazine_info.get("ammo_count", 0)) + 1
+	metadata["capacity"] = int(magazine_info.get("capacity", 0))
+	metadata["ammo_item_id"] = StringName(magazine_info.get("ammo_item_id", &""))
+	return set_entry_metadata(magazine_entry_id, metadata)
+
+
 func set_entry_metadata(entry_id: int, metadata: Dictionary) -> bool:
 	if not _entries.has(entry_id):
 		return false
@@ -318,6 +435,15 @@ func set_entry_metadata(entry_id: int, metadata: Dictionary) -> bool:
 	_entries[entry_id] = entry
 	grid_changed.emit()
 	return true
+
+
+func _compare_entries_by_grid_position(a: Dictionary, b: Dictionary) -> bool:
+	var a_position: Vector2i = a.get("position", Vector2i.ZERO)
+	var b_position: Vector2i = b.get("position", Vector2i.ZERO)
+	if a_position.y == b_position.y:
+		return a_position.x < b_position.x
+
+	return a_position.y < b_position.y
 
 
 func can_place(entry_id: int, position: Vector2i, size_override: Vector2i = Vector2i.ZERO) -> bool:

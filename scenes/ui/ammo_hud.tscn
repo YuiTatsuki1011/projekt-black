@@ -19,7 +19,7 @@ layout_mode = 0
 offset_left = 32.0
 offset_top = 32.0
 offset_right = 342.0
-offset_bottom = 126.0
+offset_bottom = 168.0
 mouse_filter = 2
 
 [node name="Margin" type="MarginContainer" parent="Root/Panel"]
@@ -41,3 +41,7 @@ text = "AMMO -- / --"
 layout_mode = 2
 theme_override_font_sizes/font_size = 22
 text = "READY"
+
+[node name="MagazineRow" type="HBoxContainer" parent="Root/Panel/Margin/Rows"]
+layout_mode = 2
+theme_override_constants/separation = 6

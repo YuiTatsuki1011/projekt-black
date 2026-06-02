@@ -43,6 +43,7 @@ const DRAG_SOURCE_WEAPON_CHAMBER := &"weapon_chamber"
 const WEAPON_PART_MAGAZINE := &"magazine"
 const WEAPON_PART_CHAMBER := &"chamber"
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
+const MAGAZINE_LOAD_INDICATOR_SCRIPT := preload("res://scripts/ui/magazine_load_indicator.gd")
 
 @export var player_path: NodePath = NodePath("../Player")
 @export var crosshair_path: NodePath = NodePath("../Crosshair")
@@ -58,6 +59,7 @@ const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4
 @export var screen_panel_gap: float = 14.0
 @export var player_menu_panel_height: float = 166.0
 @export var container_panel_height: float = 250.0
+@export var inventory_magazine_load_time_per_round: float = 0.22
 
 @onready var root: Control = $Root
 @onready var shade: ColorRect = $Root/Shade
@@ -134,6 +136,10 @@ var _inventory_menu_dragging: bool = false
 var _inventory_menu_drag_offset: Vector2 = Vector2.ZERO
 var _inventory_menu_position: Vector2 = Vector2.ZERO
 var _inventory_menu_has_custom_position: bool = false
+var _magazine_load_job: Dictionary = {}
+var _magazine_load_elapsed: float = 0.0
+var _magazine_load_rounds_total: int = 0
+var _magazine_load_rounds_done: int = 0
 
 
 func _ready() -> void:
@@ -439,6 +445,7 @@ func set_inventory_open(is_open: bool) -> void:
 		_refresh()
 		_refresh_status_panel()
 	else:
+		_cancel_magazine_load_job()
 		_cancel_drag()
 		_hide_detail_panel()
 		_hide_context_menu()
@@ -546,10 +553,12 @@ func _resolve_external_container_label(container: Node) -> String:
 	return "CONTAINER"
 
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_update_magazine_load_job(delta)
 	if _is_open:
 		_layout_realtime_inventory()
 		_refresh_status_panel()
+		_update_magazine_load_indicator()
 
 
 func _is_close_event(event: InputEvent) -> bool:
@@ -841,6 +850,7 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	item_panel.position = _grid_to_local(position)
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
+	_add_magazine_load_indicator_if_needed(item_panel, _inventory, entry_id)
 	if not is_dragged:
 		item_panel.mouse_entered.connect(_show_entry_details.bind(entry_id))
 		item_panel.mouse_exited.connect(_hide_detail_panel)
@@ -886,6 +896,7 @@ func _add_external_item_node(entry: Dictionary, is_dragged: bool = false) -> voi
 	item_panel.position = _grid_to_local(position)
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_external_item_gui_input.bind(entry_id))
+	_add_magazine_load_indicator_if_needed(item_panel, _external_inventory, entry_id)
 	if not is_dragged:
 		item_panel.mouse_entered.connect(_show_external_entry_details.bind(entry_id))
 		item_panel.mouse_exited.connect(_hide_detail_panel)
@@ -942,7 +953,9 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 				_begin_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			if mouse_button.ctrl_pressed:
+			if _is_magazine_load_target(_inventory, entry_id):
+				_cancel_magazine_load_job()
+			elif mouse_button.ctrl_pressed:
 				_try_split_stack_entry(_inventory, entry_id)
 			elif mouse_button.shift_pressed:
 				_quick_transfer_entry_between_inventories(_inventory, _external_inventory, entry_id)
@@ -964,7 +977,9 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 				_begin_external_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			if mouse_button.ctrl_pressed:
+			if _is_magazine_load_target(_external_inventory, entry_id):
+				_cancel_magazine_load_job()
+			elif mouse_button.ctrl_pressed:
 				_try_split_stack_entry(_external_inventory, entry_id)
 			elif mouse_button.shift_pressed:
 				_quick_transfer_entry_between_inventories(_external_inventory, _inventory, entry_id)
@@ -1110,31 +1125,37 @@ func _finish_drag() -> void:
 		elif target_slot != &"":
 			_equip_inventory_entry_to_slot(_drag_entry_id, target_slot)
 		elif _is_mouse_inside_grid():
-			if not _try_stack_entry_at_cell(_inventory, _inventory, _drag_entry_id, target_cell, _drag_item_size):
+			if _try_start_magazine_load_from_drop(_inventory, _drag_entry_id, _inventory, target_cell):
+				pass
+			elif not _try_stack_entry_at_cell(_inventory, _inventory, _drag_entry_id, target_cell, _drag_item_size):
 				_inventory.move_entry(_drag_entry_id, target_cell, _drag_item_size)
 		elif _is_mouse_inside_external_grid() and _external_inventory != null:
-			_transfer_entry_between_inventories(
-				_inventory,
-				_external_inventory,
-				_drag_entry_id,
-				external_target_cell,
-				_drag_item_size
-			)
+			if not _try_start_magazine_load_from_drop(_inventory, _drag_entry_id, _external_inventory, external_target_cell):
+				_transfer_entry_between_inventories(
+					_inventory,
+					_external_inventory,
+					_drag_entry_id,
+					external_target_cell,
+					_drag_item_size
+				)
 		elif not _is_mouse_inside_any_inventory_frame():
 			_drop_dragged_inventory_entry_to_world()
 	elif _drag_source == DRAG_SOURCE_EXTERNAL:
 		if target_weapon_part_slot != &"":
 			_drop_inventory_entry_to_weapon_part(_external_inventory, _drag_entry_id, target_weapon_part_slot)
 		elif _is_mouse_inside_grid():
-			_transfer_entry_between_inventories(
-				_external_inventory,
-				_inventory,
-				_drag_entry_id,
-				target_cell,
-				_drag_item_size
-			)
+			if not _try_start_magazine_load_from_drop(_external_inventory, _drag_entry_id, _inventory, target_cell):
+				_transfer_entry_between_inventories(
+					_external_inventory,
+					_inventory,
+					_drag_entry_id,
+					target_cell,
+					_drag_item_size
+				)
 		elif _is_mouse_inside_external_grid() and _external_inventory != null:
-			if not _try_stack_entry_at_cell(_external_inventory, _external_inventory, _drag_entry_id, external_target_cell, _drag_item_size):
+			if _try_start_magazine_load_from_drop(_external_inventory, _drag_entry_id, _external_inventory, external_target_cell):
+				pass
+			elif not _try_stack_entry_at_cell(_external_inventory, _external_inventory, _drag_entry_id, external_target_cell, _drag_item_size):
 				_external_inventory.move_entry(_drag_entry_id, external_target_cell, _drag_item_size)
 		elif not _is_mouse_inside_any_inventory_frame():
 			_drop_dragged_external_entry_to_world()
@@ -1367,6 +1388,12 @@ func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> v
 		entry_size,
 		ignored_entry_id
 	)
+	var can_load_magazine_at_target := _can_start_magazine_load_at_cell(
+		_get_drag_inventory(),
+		_drag_entry_id,
+		target_inventory,
+		target_cell
+	)
 	for y in entry_size.y:
 		for x in entry_size.x:
 			var cell := target_cell + Vector2i(x, y)
@@ -1374,7 +1401,7 @@ func _update_placement_markers(target_cell: Vector2i, entry_size: Vector2i) -> v
 			marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			marker.position = _grid_to_local(cell)
 			marker.size = Vector2(CELL_SIZE, CELL_SIZE)
-			marker.color = PLACEABLE_COLOR if can_stack_at_target or target_inventory.is_cell_free(cell, ignored_entry_id) else BLOCKED_COLOR
+			marker.color = PLACEABLE_COLOR if can_stack_at_target or can_load_magazine_at_target or target_inventory.is_cell_free(cell, ignored_entry_id) else BLOCKED_COLOR
 			target_root.add_child(marker)
 			_placement_markers.append(marker)
 
@@ -1723,6 +1750,243 @@ func _can_stack_dragged_entry_at_cell(
 		item_size,
 		ignored_entry_id
 	)) >= 0
+
+
+func _try_start_magazine_load_from_drop(
+	source_inventory: Node,
+	ammo_entry_id: int,
+	target_inventory: Node,
+	target_cell: Vector2i
+) -> bool:
+	if _is_split_drag_source():
+		return false
+
+	var target_entry_id := _get_magazine_load_target_entry_id(source_inventory, ammo_entry_id, target_inventory, target_cell)
+	if target_entry_id < 0:
+		return false
+
+	if not target_inventory.has_method("can_load_round_into_magazine"):
+		return false
+
+	if not bool(target_inventory.call("can_load_round_into_magazine", target_entry_id, source_inventory, ammo_entry_id)):
+		_show_magazine_load_blocked_warning(source_inventory, ammo_entry_id, target_inventory, target_entry_id)
+		return true
+
+	_start_magazine_load_job(source_inventory, ammo_entry_id, target_inventory, target_entry_id)
+	return true
+
+
+func _can_start_magazine_load_at_cell(
+	source_inventory: Node,
+	ammo_entry_id: int,
+	target_inventory: Node,
+	target_cell: Vector2i
+) -> bool:
+	if _is_split_drag_source():
+		return false
+
+	var target_entry_id := _get_magazine_load_target_entry_id(source_inventory, ammo_entry_id, target_inventory, target_cell)
+	if target_entry_id < 0 or not target_inventory.has_method("can_load_round_into_magazine"):
+		return false
+
+	return bool(target_inventory.call("can_load_round_into_magazine", target_entry_id, source_inventory, ammo_entry_id))
+
+
+func _get_magazine_load_target_entry_id(
+	source_inventory: Node,
+	ammo_entry_id: int,
+	target_inventory: Node,
+	target_cell: Vector2i
+) -> int:
+	if source_inventory == null or target_inventory == null:
+		return -1
+	if not source_inventory.has_method("get_entry") or not target_inventory.has_method("get_entry_id_at_cell"):
+		return -1
+
+	var source_entry: Dictionary = source_inventory.call("get_entry", ammo_entry_id)
+	if source_entry.is_empty():
+		return -1
+
+	var ignored_entry_id := ammo_entry_id if source_inventory == target_inventory else -1
+	var target_entry_id: int = int(target_inventory.call("get_entry_id_at_cell", target_cell, ignored_entry_id))
+	if target_entry_id < 0:
+		return -1
+
+	if not target_inventory.has_method("get_magazine_entry_info"):
+		return -1
+
+	var target_info: Dictionary = target_inventory.call("get_magazine_entry_info", target_entry_id)
+	if target_info.is_empty():
+		return -1
+
+	return target_entry_id
+
+
+func _show_magazine_load_blocked_warning(
+	source_inventory: Node,
+	ammo_entry_id: int,
+	target_inventory: Node,
+	target_entry_id: int
+) -> void:
+	var source_entry: Dictionary = source_inventory.call("get_entry", ammo_entry_id)
+	var target_info: Dictionary = target_inventory.call("get_magazine_entry_info", target_entry_id)
+	if source_entry.is_empty() or target_info.is_empty():
+		_show_warning("NO AMMO")
+		return
+
+	if source_entry.get("item_id", &"") != target_info.get("ammo_item_id", &""):
+		_show_warning("WRONG AMMO")
+		return
+
+	if int(target_info.get("ammo_count", 0)) >= int(target_info.get("capacity", 0)):
+		_show_warning("MAG FULL")
+		return
+
+	_show_warning("NO AMMO")
+
+
+func _start_magazine_load_job(
+	source_inventory: Node,
+	ammo_entry_id: int,
+	target_inventory: Node,
+	target_entry_id: int
+) -> bool:
+	if source_inventory == null or target_inventory == null:
+		return false
+	if not target_inventory.has_method("get_loadable_round_count"):
+		return false
+
+	var loadable_rounds: int = int(target_inventory.call(
+		"get_loadable_round_count",
+		target_entry_id,
+		source_inventory,
+		ammo_entry_id
+	))
+	if loadable_rounds <= 0:
+		return false
+
+	_cancel_magazine_load_job(false)
+	_magazine_load_job = {
+		"source_inventory": source_inventory,
+		"source_entry_id": ammo_entry_id,
+		"target_inventory": target_inventory,
+		"target_entry_id": target_entry_id,
+	}
+	_magazine_load_elapsed = 0.0
+	_magazine_load_rounds_done = 0
+	_magazine_load_rounds_total = loadable_rounds
+	_refresh()
+	_refresh_external_inventory()
+	return true
+
+
+func _update_magazine_load_job(delta: float) -> void:
+	if _magazine_load_job.is_empty():
+		return
+	if not _is_open:
+		_cancel_magazine_load_job(false)
+		return
+
+	var source_inventory := _magazine_load_job.get("source_inventory") as Node
+	var target_inventory := _magazine_load_job.get("target_inventory") as Node
+	var source_entry_id := int(_magazine_load_job.get("source_entry_id", -1))
+	var target_entry_id := int(_magazine_load_job.get("target_entry_id", -1))
+	if source_inventory == null or target_inventory == null or not target_inventory.has_method("load_round_into_magazine"):
+		_cancel_magazine_load_job()
+		return
+
+	var per_round_time := maxf(inventory_magazine_load_time_per_round, 0.01)
+	_magazine_load_elapsed += delta
+	while _magazine_load_elapsed >= per_round_time and _magazine_load_rounds_done < _magazine_load_rounds_total:
+		_magazine_load_elapsed -= per_round_time
+		if not bool(target_inventory.call("load_round_into_magazine", target_entry_id, source_inventory, source_entry_id)):
+			_cancel_magazine_load_job()
+			return
+
+		_magazine_load_rounds_done += 1
+		if _magazine_load_rounds_done >= _magazine_load_rounds_total:
+			_finish_magazine_load_job()
+			return
+
+
+func _finish_magazine_load_job() -> void:
+	_magazine_load_job.clear()
+	_magazine_load_elapsed = 0.0
+	_magazine_load_rounds_total = 0
+	_magazine_load_rounds_done = 0
+	_refresh()
+	_refresh_external_inventory()
+
+
+func _cancel_magazine_load_job(should_refresh: bool = true) -> void:
+	if _magazine_load_job.is_empty():
+		return
+
+	_magazine_load_job.clear()
+	_magazine_load_elapsed = 0.0
+	_magazine_load_rounds_total = 0
+	_magazine_load_rounds_done = 0
+	if should_refresh:
+		_refresh()
+		_refresh_external_inventory()
+
+
+func _is_magazine_load_target(target_inventory: Node, entry_id: int) -> bool:
+	if _magazine_load_job.is_empty():
+		return false
+
+	return target_inventory == _magazine_load_job.get("target_inventory") and entry_id == int(_magazine_load_job.get("target_entry_id", -1))
+
+
+func _get_magazine_load_progress() -> float:
+	if _magazine_load_job.is_empty() or _magazine_load_rounds_total <= 0:
+		return 0.0
+
+	var per_round_time := maxf(inventory_magazine_load_time_per_round, 0.01)
+	var partial_round := clampf(_magazine_load_elapsed / per_round_time, 0.0, 1.0)
+	return clampf((float(_magazine_load_rounds_done) + partial_round) / float(_magazine_load_rounds_total), 0.0, 1.0)
+
+
+func _add_magazine_load_indicator_if_needed(item_panel: Control, target_inventory: Node, entry_id: int) -> void:
+	if not _is_magazine_load_target(target_inventory, entry_id):
+		return
+
+	var indicator := MAGAZINE_LOAD_INDICATOR_SCRIPT.new() as Control
+	indicator.name = "MagazineLoadIndicator"
+	indicator.set_anchors_preset(Control.PRESET_FULL_RECT)
+	indicator.offset_left = 0.0
+	indicator.offset_top = 0.0
+	indicator.offset_right = 0.0
+	indicator.offset_bottom = 0.0
+	indicator.set("progress", _get_magazine_load_progress())
+	item_panel.add_child(indicator)
+
+
+func _update_magazine_load_indicator() -> void:
+	if _magazine_load_job.is_empty():
+		return
+
+	var target_inventory := _magazine_load_job.get("target_inventory") as Node
+	var target_entry_id := int(_magazine_load_job.get("target_entry_id", -1))
+	var item_panel := _get_item_panel_for_inventory(target_inventory, target_entry_id)
+	if item_panel == null:
+		return
+
+	var indicator := item_panel.get_node_or_null("MagazineLoadIndicator") as Control
+	if indicator == null:
+		_add_magazine_load_indicator_if_needed(item_panel, target_inventory, target_entry_id)
+		indicator = item_panel.get_node_or_null("MagazineLoadIndicator") as Control
+	if indicator != null:
+		indicator.set("progress", _get_magazine_load_progress())
+
+
+func _get_item_panel_for_inventory(target_inventory: Node, entry_id: int) -> Control:
+	if target_inventory == _inventory:
+		return _item_nodes.get(entry_id) as Control
+	if target_inventory == _external_inventory:
+		return _external_item_nodes.get(entry_id) as Control
+
+	return null
 
 
 func _show_item_context_menu(target_inventory: Node, entry_id: int, source: StringName) -> void:
