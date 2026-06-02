@@ -29,6 +29,9 @@ const WORKSPACE_MUTED_COLOR := Color(0.62, 0.66, 0.7, 1.0)
 const CONTEXT_MENU_COLOR := Color(0.075, 0.08, 0.09, 0.98)
 const CONTEXT_MENU_HOVER_COLOR := Color(0.18, 0.22, 0.25, 1.0)
 const CONTEXT_BUTTON_COLOR := Color(0.105, 0.11, 0.125, 1.0)
+const WEAPON_INSPECT_SIZE := Vector2(700, 650)
+const WEAPON_INSPECT_GRAPHIC_COLOR := Color(0.12, 0.13, 0.145, 1.0)
+const WEAPON_INSPECT_SLOT_COLOR := Color(0.095, 0.105, 0.12, 1.0)
 const DRAG_SOURCE_NONE := &""
 const DRAG_SOURCE_INVENTORY := &"inventory"
 const DRAG_SOURCE_EQUIPMENT := &"equipment"
@@ -114,6 +117,7 @@ var _split_dialog_inventory: Node
 var _split_dialog_entry_id: int = -1
 var _split_dialog_max_quantity: int = 1
 var _split_dialog_quantity_input: LineEdit
+var _weapon_inspect_window: Control
 
 
 func _ready() -> void:
@@ -393,6 +397,7 @@ func set_inventory_open(is_open: bool) -> void:
 		_hide_detail_panel()
 		_hide_context_menu()
 		_hide_split_dialog()
+		_hide_weapon_inspect_window()
 		_clear_external_container()
 		_set_inventory_camera(false)
 
@@ -850,6 +855,7 @@ func _begin_drag(entry_id: int) -> void:
 	_hide_detail_panel()
 	_hide_context_menu()
 	_hide_split_dialog()
+	_hide_weapon_inspect_window()
 	_drag_source = DRAG_SOURCE_INVENTORY
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
@@ -875,6 +881,7 @@ func _begin_external_drag(entry_id: int) -> void:
 	_hide_detail_panel()
 	_hide_context_menu()
 	_hide_split_dialog()
+	_hide_weapon_inspect_window()
 	_drag_source = DRAG_SOURCE_EXTERNAL
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
@@ -918,6 +925,7 @@ func _begin_split_drag(
 	_hide_detail_panel()
 	_hide_context_menu()
 	_hide_split_dialog()
+	_hide_weapon_inspect_window()
 	_drag_source = split_drag_source
 	_drag_entry_id = entry_id
 	_drag_equipment_slot = &""
@@ -1569,6 +1577,8 @@ func _show_item_context_menu(target_inventory: Node, entry_id: int, source: Stri
 	_hide_split_dialog()
 
 	var actions: Array[Dictionary] = []
+	if _can_inspect_entry(target_inventory, entry_id):
+		actions.append({"label": "Inspect", "action": &"inspect"})
 	if _can_split_stack_entry(target_inventory, entry_id):
 		actions.append({"label": "Split", "action": &"split"})
 	var opposite_inventory := _get_opposite_inventory_for_source(source)
@@ -1609,7 +1619,9 @@ func _show_item_context_menu(target_inventory: Node, entry_id: int, source: Stri
 		var action_name: StringName = action.get("action", &"none")
 		var button := _create_context_menu_button(str(action.get("label", "Action")))
 		button.disabled = action_name == &"none"
-		if action_name == &"split":
+		if action_name == &"inspect":
+			button.pressed.connect(Callable(self, "_on_context_inspect_entry_pressed").bind(target_inventory, entry_id))
+		elif action_name == &"split":
 			button.pressed.connect(Callable(self, "_on_context_split_pressed").bind(target_inventory, entry_id))
 		elif action_name == &"transfer":
 			button.pressed.connect(Callable(self, "_on_context_transfer_pressed").bind(target_inventory, opposite_inventory, entry_id))
@@ -1633,6 +1645,12 @@ func _create_context_menu_button(text: String) -> Button:
 	button.add_theme_stylebox_override("pressed", _make_flat_style(Color(0.22, 0.28, 0.32, 1.0), Color.TRANSPARENT, 0))
 	button.add_theme_stylebox_override("disabled", _make_flat_style(Color(0.08, 0.085, 0.095, 1.0), Color.TRANSPARENT, 0))
 	return button
+
+
+func _on_context_inspect_entry_pressed(target_inventory: Node, entry_id: int) -> void:
+	_hide_context_menu()
+	_hide_split_dialog()
+	_show_weapon_inspect_for_entry(target_inventory, entry_id)
 
 
 func _on_context_split_pressed(target_inventory: Node, entry_id: int) -> void:
@@ -1854,6 +1872,388 @@ func _can_split_stack_entry(target_inventory: Node, entry_id: int) -> bool:
 	var item_id: StringName = entry.get("item_id", &"")
 	var definition: Dictionary = _get_item_definition_for_inventory(target_inventory, item_id)
 	return bool(definition.get("stackable", false)) and int(entry.get("quantity", 1)) > 1
+
+
+func _can_inspect_entry(target_inventory: Node, entry_id: int) -> bool:
+	if target_inventory == null or not target_inventory.has_method("get_entry"):
+		return false
+
+	var entry: Dictionary = target_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	return _load_weapon_resource_for_item(item_id) != null
+
+
+func _show_weapon_inspect_for_entry(target_inventory: Node, entry_id: int) -> void:
+	if target_inventory == null or not target_inventory.has_method("get_entry"):
+		return
+
+	var entry: Dictionary = target_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var weapon := _load_weapon_resource_for_item(item_id)
+	if weapon == null:
+		return
+
+	_show_weapon_inspect_window(item_id, weapon, &"")
+
+
+func _show_weapon_inspect_for_equipment_slot(slot: StringName) -> void:
+	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
+	if item_id == &"":
+		return
+
+	var weapon := _get_equipped_weapon_for_slot(slot)
+	if weapon == null:
+		return
+
+	_show_weapon_inspect_window(item_id, weapon, slot)
+
+
+func _show_weapon_inspect_window(item_id: StringName, weapon: Resource, equipment_slot: StringName = &"") -> void:
+	if weapon == null:
+		return
+
+	_hide_weapon_inspect_window()
+	_hide_detail_panel()
+
+	var window := Panel.new()
+	window.name = "WeaponInspectWindow"
+	window.mouse_filter = Control.MOUSE_FILTER_STOP
+	window.z_index = 70
+	window.size = WEAPON_INSPECT_SIZE
+	window.custom_minimum_size = WEAPON_INSPECT_SIZE
+	window.add_theme_stylebox_override("panel", _make_flat_style(
+		DETAIL_PANEL_COLOR,
+		DETAIL_PANEL_BORDER_COLOR,
+		2
+	))
+	root.add_child(window)
+	_weapon_inspect_window = window
+
+	var margin := _create_margin_container(14, 12, 14, 14)
+	window.add_child(margin)
+
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_STOP
+	rows.add_theme_constant_override("separation", 10)
+	margin.add_child(rows)
+
+	rows.add_child(_create_weapon_inspect_header(item_id, weapon, equipment_slot))
+	rows.add_child(_create_weapon_graphic_panel(item_id, weapon))
+	rows.add_child(_create_weapon_stats_panel(weapon))
+	rows.add_child(_create_weapon_slots_panel(item_id, weapon, equipment_slot))
+
+	_position_weapon_inspect_window(window)
+
+
+func _create_weapon_inspect_header(item_id: StringName, weapon: Resource, equipment_slot: StringName) -> Control:
+	var header := HBoxContainer.new()
+	header.mouse_filter = Control.MOUSE_FILTER_STOP
+	header.custom_minimum_size = Vector2(0, 30)
+	header.add_theme_constant_override("separation", 8)
+
+	var title := Label.new()
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.text = str(weapon.get("display_name"))
+	title.modulate = DETAIL_TEXT_COLOR
+	title.add_theme_font_size_override("font_size", 16)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title.clip_text = true
+	header.add_child(title)
+
+	var source_label := Label.new()
+	source_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	source_label.text = _get_weapon_inspect_source_label(item_id, equipment_slot)
+	source_label.modulate = DETAIL_MUTED_COLOR
+	source_label.add_theme_font_size_override("font_size", 11)
+	source_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	source_label.custom_minimum_size = Vector2(160, 0)
+	source_label.clip_text = true
+	header.add_child(source_label)
+
+	var close_button := Button.new()
+	close_button.text = "X"
+	close_button.focus_mode = Control.FOCUS_NONE
+	close_button.custom_minimum_size = Vector2(30, 28)
+	close_button.add_theme_font_size_override("font_size", 12)
+	close_button.add_theme_stylebox_override("normal", _make_flat_style(CONTEXT_BUTTON_COLOR, DETAIL_PANEL_BORDER_COLOR, 1))
+	close_button.add_theme_stylebox_override("hover", _make_flat_style(CONTEXT_MENU_HOVER_COLOR, DETAIL_PANEL_BORDER_COLOR, 1))
+	close_button.add_theme_stylebox_override("pressed", _make_flat_style(Color(0.22, 0.28, 0.32, 1.0), DETAIL_PANEL_BORDER_COLOR, 1))
+	close_button.pressed.connect(Callable(self, "_hide_weapon_inspect_window"))
+	header.add_child(close_button)
+
+	return header
+
+
+func _get_weapon_inspect_source_label(item_id: StringName, equipment_slot: StringName) -> String:
+	if equipment_slot != &"":
+		return _get_slot_display_name(equipment_slot)
+
+	var definition: Dictionary = _inventory.get_item_definition(item_id) if _inventory != null else {}
+	return str(definition.get("name", item_id))
+
+
+func _create_weapon_graphic_panel(item_id: StringName, weapon: Resource) -> Control:
+	var graphic := Panel.new()
+	graphic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	graphic.custom_minimum_size = Vector2(0, 168)
+	graphic.add_theme_stylebox_override("panel", _make_flat_style(
+		WEAPON_INSPECT_GRAPHIC_COLOR,
+		Color(0.22, 0.24, 0.27, 1.0),
+		1
+	))
+
+	var name_label := Label.new()
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_label.position = Vector2(14, 10)
+	name_label.size = Vector2(360, 20)
+	name_label.text = "%s  /  %s" % [str(weapon.get("display_name")), str(item_id)]
+	name_label.modulate = DETAIL_MUTED_COLOR
+	name_label.add_theme_font_size_override("font_size", 11)
+	name_label.clip_text = true
+	graphic.add_child(name_label)
+
+	_add_weapon_graphic_rect(graphic, Rect2(Vector2(136, 72), Vector2(300, 28)), Color(0.33, 0.35, 0.37, 1.0))
+	_add_weapon_graphic_rect(graphic, Rect2(Vector2(420, 80), Vector2(118, 10)), Color(0.43, 0.44, 0.45, 1.0))
+	_add_weapon_graphic_rect(graphic, Rect2(Vector2(184, 50), Vector2(118, 14)), Color(0.26, 0.28, 0.3, 1.0))
+	_add_weapon_graphic_rect(graphic, Rect2(Vector2(310, 100), Vector2(36, 72)), Color(0.22, 0.24, 0.25, 1.0))
+	_add_weapon_graphic_rect(graphic, Rect2(Vector2(356, 102), Vector2(52, 70)), Color(0.18, 0.19, 0.205, 1.0))
+	_add_weapon_graphic_rect(graphic, Rect2(Vector2(92, 84), Vector2(84, 22)), Color(0.18, 0.19, 0.205, 1.0))
+
+	var chamber_marker := ColorRect.new()
+	chamber_marker.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	chamber_marker.position = Vector2(290, 65)
+	chamber_marker.size = Vector2(30, 6)
+	chamber_marker.color = SLOT_ACTIVE_BORDER_COLOR
+	graphic.add_child(chamber_marker)
+
+	return graphic
+
+
+func _add_weapon_graphic_rect(parent: Control, rect: Rect2, color: Color) -> void:
+	var part := ColorRect.new()
+	part.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	part.position = rect.position
+	part.size = rect.size
+	part.color = color
+	parent.add_child(part)
+
+
+func _create_weapon_stats_panel(weapon: Resource) -> Control:
+	var stats_panel := Panel.new()
+	stats_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stats_panel.custom_minimum_size = Vector2(0, 180)
+	stats_panel.add_theme_stylebox_override("panel", _make_flat_style(
+		Color(0.075, 0.08, 0.09, 0.92),
+		Color(0.24, 0.26, 0.3, 1.0),
+		1
+	))
+
+	var margin := _create_margin_container(12, 10, 12, 10)
+	stats_panel.add_child(margin)
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rows.add_theme_constant_override("separation", 5)
+	margin.add_child(rows)
+
+	rows.add_child(_create_weapon_inspect_section_label("STATS"))
+	rows.add_child(_create_inspect_stat_bar("Damage", str(_get_resource_int(weapon, &"damage")), float(_get_resource_int(weapon, &"damage")) / 40.0))
+	rows.add_child(_create_inspect_stat_bar("Capacity", str(_get_weapon_total_capacity(weapon)), float(_get_weapon_total_capacity(weapon)) / 16.0))
+	rows.add_child(_create_inspect_stat_bar("Fire Interval", _format_seconds(_get_resource_float(weapon, &"fire_cooldown")), 1.0 - clampf(_get_resource_float(weapon, &"fire_cooldown") / 1.0, 0.0, 1.0)))
+	rows.add_child(_create_inspect_stat_bar("Reload", _format_seconds(_get_resource_float(weapon, &"reload_time")), 1.0 - clampf(_get_resource_float(weapon, &"reload_time") / 3.0, 0.0, 1.0)))
+	rows.add_child(_create_inspect_stat_bar("Recoil", "%.2f" % _get_resource_float(weapon, &"recoil_amount"), 1.0 - clampf(_get_resource_float(weapon, &"recoil_amount") / 0.6, 0.0, 1.0)))
+
+	return stats_panel
+
+
+func _create_weapon_inspect_section_label(text: String) -> Label:
+	var label := Label.new()
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.text = text
+	label.modulate = DETAIL_TEXT_COLOR
+	label.add_theme_font_size_override("font_size", 12)
+	label.clip_text = true
+	return label
+
+
+func _create_inspect_stat_bar(stat_name: String, stat_value: String, ratio: float) -> Control:
+	var row := HBoxContainer.new()
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.custom_minimum_size = Vector2(0, 22)
+	row.add_theme_constant_override("separation", 8)
+
+	var name_label := Label.new()
+	name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name_label.text = stat_name
+	name_label.modulate = DETAIL_MUTED_COLOR
+	name_label.add_theme_font_size_override("font_size", 11)
+	name_label.custom_minimum_size = Vector2(112, 0)
+	name_label.clip_text = true
+	row.add_child(name_label)
+
+	var bar_back := Panel.new()
+	bar_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	bar_back.custom_minimum_size = Vector2(410, 12)
+	bar_back.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bar_back.add_theme_stylebox_override("panel", _make_flat_style(Color(0.035, 0.04, 0.045, 1.0), Color(0.22, 0.24, 0.27, 1.0), 1))
+	row.add_child(bar_back)
+
+	var fill := ColorRect.new()
+	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fill.position = Vector2(1, 1)
+	fill.size = Vector2(maxf(0.0, 408.0 * clampf(ratio, 0.0, 1.0)), 10)
+	fill.color = Color(0.2, 0.56, 0.66, 1.0)
+	bar_back.add_child(fill)
+
+	var value_label := Label.new()
+	value_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	value_label.text = stat_value
+	value_label.modulate = DETAIL_TEXT_COLOR
+	value_label.add_theme_font_size_override("font_size", 11)
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.custom_minimum_size = Vector2(82, 0)
+	value_label.clip_text = true
+	row.add_child(value_label)
+
+	return row
+
+
+func _create_weapon_slots_panel(item_id: StringName, weapon: Resource, equipment_slot: StringName) -> Control:
+	var slots_panel := Panel.new()
+	slots_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slots_panel.custom_minimum_size = Vector2(0, 198)
+	slots_panel.add_theme_stylebox_override("panel", _make_flat_style(
+		Color(0.07, 0.075, 0.085, 0.94),
+		Color(0.24, 0.26, 0.3, 1.0),
+		1
+	))
+
+	var margin := _create_margin_container(12, 10, 12, 10)
+	slots_panel.add_child(margin)
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rows.add_theme_constant_override("separation", 8)
+	margin.add_child(rows)
+	rows.add_child(_create_weapon_inspect_section_label("PART SLOTS"))
+
+	var grid := GridContainer.new()
+	grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	grid.columns = 5
+	grid.add_theme_constant_override("h_separation", 6)
+	grid.add_theme_constant_override("v_separation", 6)
+	rows.add_child(grid)
+
+	var item_type: StringName = _get_item_type(item_id)
+	if item_type == &"ranged_weapon":
+		for slot_data in _get_ranged_weapon_part_slots(weapon, equipment_slot):
+			grid.add_child(_create_weapon_part_slot_card(slot_data))
+	else:
+		for slot_data in _get_melee_weapon_part_slots():
+			grid.add_child(_create_weapon_part_slot_card(slot_data))
+
+	return slots_panel
+
+
+func _get_ranged_weapon_part_slots(weapon: Resource, equipment_slot: StringName) -> Array[Dictionary]:
+	var magazine_id := StringName(weapon.get("magazine_item_id"))
+	var magazine_definition: Dictionary = _inventory.get_item_definition(magazine_id) if _inventory != null and magazine_id != &"" else {}
+	var magazine_name := str(magazine_definition.get("short_name", magazine_definition.get("name", magazine_id)))
+	var magazine_line := magazine_name
+	if _is_active_firearm_slot(equipment_slot) and _player != null:
+		magazine_line = "%s\n%d/%d" % [
+			magazine_name,
+			int(_player.get("magazine_ammo")),
+			int(_player.get("magazine_size")),
+		]
+
+	var chamber_line := "Round"
+	if _is_active_firearm_slot(equipment_slot) and _player != null:
+		chamber_line = "%d/%d" % [
+			int(_player.get("chamber_ammo")),
+			int(_player.get("chamber_size")),
+		]
+
+	return [
+		{"name": "MAGAZINE", "value": magazine_line, "locked": false},
+		{"name": "CHAMBER", "value": chamber_line, "locked": true},
+		{"name": "OPTIC", "value": "Empty", "locked": false},
+		{"name": "MUZZLE", "value": "Empty", "locked": false},
+		{"name": "GRIP", "value": "Empty", "locked": false},
+		{"name": "UNDER", "value": "Empty", "locked": false},
+		{"name": "ACCESSORY", "value": "Empty", "locked": false},
+		{"name": "STOCK", "value": "Empty", "locked": false},
+		{"name": "BARREL", "value": "Fixed", "locked": true},
+		{"name": "RECEIVER", "value": "Fixed", "locked": true},
+	]
+
+
+func _get_melee_weapon_part_slots() -> Array[Dictionary]:
+	return [
+		{"name": "BLADE", "value": "Fixed", "locked": true},
+		{"name": "HANDLE", "value": "Fixed", "locked": true},
+		{"name": "ACCESSORY", "value": "Empty", "locked": false},
+	]
+
+
+func _create_weapon_part_slot_card(slot_data: Dictionary) -> Control:
+	var card := Panel.new()
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.custom_minimum_size = Vector2(124, 58)
+	card.add_theme_stylebox_override("panel", _make_flat_style(
+		WEAPON_INSPECT_SLOT_COLOR,
+		DETAIL_PANEL_BORDER_COLOR if not bool(slot_data.get("locked", false)) else Color(0.24, 0.25, 0.28, 1.0),
+		1
+	))
+
+	var margin := _create_margin_container(8, 6, 8, 6)
+	card.add_child(margin)
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	rows.add_theme_constant_override("separation", 3)
+	margin.add_child(rows)
+
+	var name := Label.new()
+	name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	name.text = str(slot_data.get("name", "SLOT"))
+	name.modulate = DETAIL_MUTED_COLOR
+	name.add_theme_font_size_override("font_size", 9)
+	name.clip_text = true
+	rows.add_child(name)
+
+	var value := Label.new()
+	value.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	value.text = str(slot_data.get("value", "Empty"))
+	value.modulate = DETAIL_TEXT_COLOR if not bool(slot_data.get("locked", false)) else DETAIL_MUTED_COLOR
+	value.add_theme_font_size_override("font_size", 10)
+	value.clip_text = true
+	value.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rows.add_child(value)
+
+	return card
+
+
+func _get_weapon_total_capacity(weapon: Resource) -> int:
+	return _get_resource_int(weapon, &"magazine_size") + _get_resource_int(weapon, &"chamber_size")
+
+
+func _hide_weapon_inspect_window() -> void:
+	if is_instance_valid(_weapon_inspect_window):
+		_weapon_inspect_window.queue_free()
+	_weapon_inspect_window = null
+
+
+func _position_weapon_inspect_window(window: Control) -> void:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var margin := 24.0
+	window.global_position = Vector2(
+		clampf((viewport_size.x - window.size.x) * 0.5, margin, viewport_size.x - window.size.x - margin),
+		clampf((viewport_size.y - window.size.y) * 0.5, margin, viewport_size.y - window.size.y - margin)
+	)
 
 
 func _try_split_stack_entry(target_inventory: Node, entry_id: int, split_quantity: int = -1) -> bool:
@@ -2079,8 +2479,74 @@ func _on_equipment_slot_gui_input(event: InputEvent, slot: StringName) -> void:
 			_begin_equipment_drag(slot)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			_store_equipped_slot(slot)
+			_show_equipment_context_menu(slot)
 			get_viewport().set_input_as_handled()
+
+
+func _show_equipment_context_menu(slot: StringName) -> void:
+	if _equipment == null:
+		return
+
+	_hide_detail_panel()
+	_hide_context_menu()
+	_hide_split_dialog()
+
+	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
+	var actions: Array[Dictionary] = []
+	if item_id != &"" and _load_weapon_resource_for_item(item_id) != null:
+		actions.append({"label": "Inspect", "action": &"inspect"})
+	if item_id != &"":
+		actions.append({"label": "Store", "action": &"store"})
+	if actions.is_empty():
+		actions.append({"label": "No Action", "action": &"none"})
+
+	var menu_width := 156.0
+	var row_height := 28.0
+	var menu_height := 12.0 + float(actions.size()) * row_height + float(maxi(actions.size() - 1, 0)) * 4.0
+	var menu := Panel.new()
+	menu.name = "EquipmentContextMenu"
+	menu.mouse_filter = Control.MOUSE_FILTER_STOP
+	menu.z_index = 60
+	menu.size = Vector2(menu_width, menu_height)
+	menu.custom_minimum_size = menu.size
+	menu.add_theme_stylebox_override("panel", _make_flat_style(
+		CONTEXT_MENU_COLOR,
+		DETAIL_PANEL_BORDER_COLOR,
+		1
+	))
+	root.add_child(menu)
+	_context_menu = menu
+
+	var rows := VBoxContainer.new()
+	rows.mouse_filter = Control.MOUSE_FILTER_STOP
+	rows.position = Vector2(6, 6)
+	rows.size = Vector2(menu_width - 12.0, menu_height - 12.0)
+	rows.add_theme_constant_override("separation", 4)
+	menu.add_child(rows)
+
+	for action in actions:
+		var action_name: StringName = action.get("action", &"none")
+		var button := _create_context_menu_button(str(action.get("label", "Action")))
+		button.disabled = action_name == &"none"
+		if action_name == &"inspect":
+			button.pressed.connect(Callable(self, "_on_equipment_inspect_pressed").bind(slot))
+		elif action_name == &"store":
+			button.pressed.connect(Callable(self, "_on_equipment_store_pressed").bind(slot))
+		rows.add_child(button)
+
+	_position_floating_panel(menu, get_viewport().get_mouse_position())
+
+
+func _on_equipment_inspect_pressed(slot: StringName) -> void:
+	_hide_context_menu()
+	_hide_split_dialog()
+	_show_weapon_inspect_for_equipment_slot(slot)
+
+
+func _on_equipment_store_pressed(slot: StringName) -> void:
+	_hide_context_menu()
+	_hide_split_dialog()
+	_store_equipped_slot(slot)
 
 
 func _begin_equipment_drag(slot: StringName) -> void:
@@ -2090,6 +2556,7 @@ func _begin_equipment_drag(slot: StringName) -> void:
 	_hide_detail_panel()
 	_hide_context_menu()
 	_hide_split_dialog()
+	_hide_weapon_inspect_window()
 	var item_id: StringName = _get_equipped_item_id_for_slot(slot)
 	if item_id == &"":
 		return
