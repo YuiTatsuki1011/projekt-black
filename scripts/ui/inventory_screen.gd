@@ -778,7 +778,8 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			_begin_drag(entry_id)
 			get_viewport().set_input_as_handled()
 		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
-			_try_quick_equip_entry(entry_id)
+			if not _try_split_stack_entry(_inventory, entry_id):
+				_try_quick_equip_entry(entry_id)
 			get_viewport().set_input_as_handled()
 
 
@@ -787,6 +788,9 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 		var mouse_button := event as InputEventMouseButton
 		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
 			_begin_external_drag(entry_id)
+			get_viewport().set_input_as_handled()
+		elif mouse_button.button_index == MOUSE_BUTTON_RIGHT and mouse_button.pressed:
+			_try_split_stack_entry(_external_inventory, entry_id)
 			get_viewport().set_input_as_handled()
 
 
@@ -1253,6 +1257,31 @@ func _can_stack_dragged_entry_at_cell(
 		item_size,
 		ignored_entry_id
 	)) >= 0
+
+
+func _try_split_stack_entry(target_inventory: Node, entry_id: int) -> bool:
+	if target_inventory == null or not target_inventory.has_method("split_entry"):
+		return false
+
+	var entry: Dictionary = target_inventory.get_entry(entry_id)
+	if entry.is_empty():
+		return false
+
+	var item_id: StringName = entry.get("item_id", &"")
+	var definition: Dictionary = _get_item_definition_for_inventory(target_inventory, item_id)
+	if not bool(definition.get("stackable", false)):
+		return false
+	if int(entry.get("quantity", 1)) <= 1:
+		return false
+
+	var split_entry: Dictionary = target_inventory.split_entry(entry_id)
+	if split_entry.is_empty():
+		_show_warning("NO SPACE")
+		return true
+
+	_refresh()
+	_refresh_external_inventory()
+	return true
 
 
 func _drop_item_to_world(item_id: StringName, quantity: int = 1) -> bool:

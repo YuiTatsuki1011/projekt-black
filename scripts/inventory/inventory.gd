@@ -189,6 +189,40 @@ func remove_entry(entry_id: int) -> Dictionary:
 	return entry
 
 
+func split_entry(entry_id: int, split_quantity: int = -1) -> Dictionary:
+	if not _entries.has(entry_id):
+		return {}
+
+	var entry: Dictionary = _entries[entry_id]
+	var item_id: StringName = entry.get("item_id", &"")
+	var definition: Dictionary = get_item_definition(item_id)
+	if not bool(definition.get("stackable", false)):
+		return {}
+
+	var source_quantity: int = int(entry.get("quantity", 0))
+	if source_quantity <= 1:
+		return {}
+
+	var max_stack: int = int(definition.get("max_stack", 1))
+	var quantity_to_split: int = split_quantity
+	if quantity_to_split <= 0:
+		quantity_to_split = floori(float(source_quantity) * 0.5)
+	quantity_to_split = clampi(quantity_to_split, 1, mini(source_quantity - 1, max_stack))
+
+	var item_size: Vector2i = entry.get("size", Vector2i.ONE)
+	var source_position: Vector2i = entry.get("position", Vector2i.ZERO)
+	var new_position: Vector2i = _find_nearest_free_position(item_size, source_position)
+	if new_position.x < 0:
+		return {}
+
+	entry["quantity"] = source_quantity - quantity_to_split
+	_entries[entry_id] = entry
+
+	var new_entry_id: int = _create_entry(item_id, new_position, item_size, quantity_to_split)
+	grid_changed.emit()
+	return get_entry(new_entry_id)
+
+
 func has_item(item_id: StringName, quantity: int = 1) -> bool:
 	return get_quantity(item_id) >= quantity
 
@@ -443,7 +477,7 @@ static func _get_fallback_item_definition(item_id: StringName) -> Dictionary:
 	}
 
 
-func _create_entry(item_id: StringName, position: Vector2i, size: Vector2i, quantity: int) -> void:
+func _create_entry(item_id: StringName, position: Vector2i, size: Vector2i, quantity: int) -> int:
 	var entry_id: int = _next_entry_id
 	_next_entry_id += 1
 	_entries[entry_id] = {
@@ -452,6 +486,7 @@ func _create_entry(item_id: StringName, position: Vector2i, size: Vector2i, quan
 		"size": size,
 		"quantity": quantity,
 	}
+	return entry_id
 
 
 func _set_total_quantity(item_id: StringName, quantity: int) -> void:
@@ -471,6 +506,24 @@ func _find_first_free_position(size: Vector2i) -> Vector2i:
 				return position
 
 	return Vector2i(-1, -1)
+
+
+func _find_nearest_free_position(size: Vector2i, origin: Vector2i) -> Vector2i:
+	var best_position := Vector2i(-1, -1)
+	var best_distance: int = 2147483647
+
+	for y in grid_height:
+		for x in grid_width:
+			var position := Vector2i(x, y)
+			if not _is_area_free(position, size):
+				continue
+
+			var distance: int = absi(position.x - origin.x) + absi(position.y - origin.y)
+			if distance < best_distance:
+				best_distance = distance
+				best_position = position
+
+	return best_position
 
 
 func _find_first_free_position_with_rects(size: Vector2i, occupied_rects: Array[Rect2i]) -> Vector2i:
