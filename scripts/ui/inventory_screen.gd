@@ -30,8 +30,15 @@ const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4
 
 @export var player_path: NodePath = NodePath("../Player")
 @export var dropped_item_scene: PackedScene
+@export var close_on_damage: bool = true
+@export var normal_camera_position: Vector2 = Vector2(0, -22)
+@export var normal_camera_zoom: Vector2 = Vector2(2.3, 2.3)
+@export var inventory_camera_position: Vector2 = Vector2(145, -22)
+@export var inventory_camera_zoom: Vector2 = Vector2(2.85, 2.85)
+@export var camera_transition_time: float = 0.18
 
 @onready var root: Control = $Root
+@onready var shade: ColorRect = $Root/Shade
 @onready var panel: Control = $Root/Panel
 @onready var equipment_root: HBoxContainer = $Root/Panel/Margin/Rows/EquipmentRoot
 @onready var grid_root: Control = $Root/Panel/Margin/Rows/GridRoot
@@ -65,17 +72,27 @@ var _equipped_detail_rows: VBoxContainer
 var _detail_rows: VBoxContainer
 var _hover_entry_id: int = -1
 var _hover_equipment_slot: StringName = &""
+var _is_open: bool = false
+var _camera: Camera2D
+var _camera_tween: Tween
+var _damage_edge_flash: ColorRect
+var _damage_flash_tween: Tween
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	visible = false
+	visible = true
+	root.visible = false
+	shade.color = Color(0.025, 0.025, 0.028, 0.16)
 
 	var player := get_node_or_null(player_path)
 	if player != null:
 		_player = player as Node2D
 		_inventory = player.get_node_or_null("Inventory")
 		_equipment = player.get_node_or_null("Equipment")
+		_camera = player.get_node_or_null("Camera2D") as Camera2D
+		if player.has_signal("damage_feedback"):
+			player.connect("damage_feedback", Callable(self, "_on_player_damage_feedback"))
 
 	if _inventory != null:
 		if _inventory.has_signal("grid_changed"):
@@ -86,15 +103,21 @@ func _ready() -> void:
 	if _equipment != null and _equipment.has_signal("equipment_changed"):
 		_equipment.connect("equipment_changed", Callable(self, "_refresh_equipment"))
 	_refresh_equipment()
+	_ensure_damage_edge_flash()
 
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("inventory_toggle"):
-		set_inventory_open(not visible)
+		set_inventory_open(not _is_open)
 		get_viewport().set_input_as_handled()
 		return
 
-	if not visible:
+	if not _is_open:
+		return
+
+	if _is_close_event(event):
+		set_inventory_open(false)
+		get_viewport().set_input_as_handled()
 		return
 
 	if _is_dragging():
@@ -112,14 +135,64 @@ func _input(event: InputEvent) -> void:
 
 
 func set_inventory_open(is_open: bool) -> void:
-	visible = is_open
-	get_tree().paused = is_open
+	if _is_open == is_open:
+		return
+
+	_is_open = is_open
+	root.visible = is_open
+	get_tree().paused = false
+	if _player != null and _player.has_method("set_inventory_open"):
+		_player.call("set_inventory_open", is_open)
 
 	if is_open:
+		_layout_realtime_inventory()
+		_set_inventory_camera(true)
 		_refresh()
 	else:
 		_cancel_drag()
 		_hide_detail_panel()
+		_set_inventory_camera(false)
+
+
+func is_inventory_open() -> bool:
+	return _is_open
+
+
+func _process(_delta: float) -> void:
+	if _is_open:
+		_layout_realtime_inventory()
+
+
+func _is_close_event(event: InputEvent) -> bool:
+	if event.is_action_pressed("ui_cancel"):
+		return true
+
+	if event is InputEventKey:
+		var key_event := event as InputEventKey
+		return key_event.pressed and not key_event.echo and key_event.keycode == KEY_ESCAPE
+
+	return false
+
+
+func _layout_realtime_inventory() -> void:
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var target_x: float = viewport_size.x - panel.size.x - 72.0
+	var target_y: float = (viewport_size.y - panel.size.y) * 0.5
+	panel.position = Vector2(maxf(target_x, 24.0), maxf(target_y, 40.0))
+
+
+func _set_inventory_camera(is_open: bool) -> void:
+	if _camera == null:
+		return
+
+	if _camera_tween != null:
+		_camera_tween.kill()
+
+	var target_position := inventory_camera_position if is_open else normal_camera_position
+	var target_zoom := inventory_camera_zoom if is_open else normal_camera_zoom
+	_camera_tween = create_tween()
+	_camera_tween.tween_property(_camera, "position", target_position, camera_transition_time)
+	_camera_tween.parallel().tween_property(_camera, "zoom", target_zoom, camera_transition_time)
 
 
 func _build_grid_cells() -> void:
@@ -1068,6 +1141,40 @@ func _position_detail_panel() -> void:
 		clampf(target_x, margin, viewport_size.x - detail_size.x - margin),
 		clampf(target_y, margin, viewport_size.y - detail_size.y - margin)
 	)
+
+
+func _on_player_damage_feedback(direction: Vector2) -> void:
+	_show_damage_edge_flash(direction)
+	if close_on_damage and _is_open:
+		set_inventory_open(false)
+
+
+func _ensure_damage_edge_flash() -> void:
+	if is_instance_valid(_damage_edge_flash):
+		return
+
+	_damage_edge_flash = ColorRect.new()
+	_damage_edge_flash.name = "DamageEdgeFlash"
+	_damage_edge_flash.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_damage_edge_flash.color = Color(0.85, 0.04, 0.02, 0.0)
+	_damage_edge_flash.z_index = 80
+	add_child(_damage_edge_flash)
+
+
+func _show_damage_edge_flash(direction: Vector2) -> void:
+	_ensure_damage_edge_flash()
+
+	var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+	var edge_width := minf(260.0, viewport_size.x * 0.22)
+	var flash_from_left := direction.x >= 0.0
+	_damage_edge_flash.position = Vector2(0.0 if flash_from_left else viewport_size.x - edge_width, 0.0)
+	_damage_edge_flash.size = Vector2(edge_width, viewport_size.y)
+	_damage_edge_flash.color = Color(0.85, 0.04, 0.02, 0.55)
+
+	if _damage_flash_tween != null:
+		_damage_flash_tween.kill()
+	_damage_flash_tween = create_tween()
+	_damage_flash_tween.tween_property(_damage_edge_flash, "color:a", 0.0, 0.28)
 
 
 func _populate_item_detail_card(

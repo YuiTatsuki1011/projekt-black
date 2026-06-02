@@ -8,6 +8,7 @@ signal interact_requested
 signal died
 signal stamina_changed(current_stamina: float, max_stamina: float, overheated: bool, melee_available: bool)
 signal stamina_use_failed
+signal damage_feedback(direction: Vector2)
 
 const ENEMY_COLLISION_MASK: int = 8
 const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4"]
@@ -56,6 +57,7 @@ enum MeleeState {
 @export var projectile_scene: PackedScene
 @export var afterimage_scene: PackedScene
 @export var player_bleed_vfx_scene: PackedScene
+@export var inventory_pose_tilt_degrees: float = -5.0
 
 @onready var body_root: Node2D = $VisualRoot/BodyRoot
 @onready var arm_rig: Node2D = $ArmRig
@@ -85,6 +87,7 @@ var _reload_remaining: float = 0.0
 var _is_reloading: bool = false
 var _is_crouching: bool = false
 var _is_dead: bool = false
+var _is_inventory_open: bool = false
 var _facing: int = 1
 var _recoil: float = 0.0
 var _nearby_interactables: Array[Node2D] = []
@@ -114,6 +117,9 @@ var _firearm_slot_input_was_pressed: Array[bool] = [false, false, false, false]
 var _is_sub_weapon_aiming: bool = false
 var _sub_weapon_fire_was_pressed: bool = false
 var _melee_combo_damages: PackedInt32Array = PackedInt32Array([34, 48, 68])
+var _pending_damage_direction: Vector2 = Vector2.ZERO
+var _body_rotation_before_inventory: float = 0.0
+var _arm_rig_was_visible_before_inventory: bool = true
 
 
 func _ready() -> void:
@@ -388,8 +394,8 @@ func _update_stamina(delta: float) -> void:
 
 
 func _handle_movement(delta: float) -> void:
-	var input_axis: float = Input.get_axis("move_left", "move_right")
-	var action_locked := _is_dodging or _melee_state != MeleeState.READY
+	var action_locked := _is_inventory_open or _is_dodging or _melee_state != MeleeState.READY
+	var input_axis: float = 0.0 if _is_inventory_open else Input.get_axis("move_left", "move_right")
 	var wants_crouch: bool = Input.is_action_pressed("crouch") and is_on_floor() and not action_locked
 	_set_crouching(wants_crouch)
 
@@ -420,6 +426,9 @@ func _handle_movement(delta: float) -> void:
 
 
 func _handle_actions() -> void:
+	if _is_inventory_open:
+		return
+
 	if Input.is_action_just_pressed("dodge"):
 		_try_start_dodge()
 
@@ -830,6 +839,42 @@ func _set_ranged_visual(visible: bool) -> void:
 	gun_root.visible = visible
 
 
+func set_inventory_open(is_open: bool) -> void:
+	if _is_inventory_open == is_open:
+		return
+
+	_is_inventory_open = is_open
+	if _is_inventory_open:
+		_is_sub_weapon_aiming = false
+		_sub_weapon_fire_was_pressed = false
+		_is_reloading = false
+		_reload_remaining = 0.0
+		_set_sub_weapon_aim_visual(false)
+		if _melee_state != MeleeState.READY:
+			_cancel_melee_attack()
+		_set_inventory_pose(true)
+	else:
+		_set_inventory_pose(false)
+
+
+func is_inventory_open() -> bool:
+	return _is_inventory_open
+
+
+func _set_inventory_pose(is_enabled: bool) -> void:
+	if is_enabled:
+		_body_rotation_before_inventory = body_root.rotation
+		_arm_rig_was_visible_before_inventory = arm_rig.visible
+		body_root.rotation_degrees = inventory_pose_tilt_degrees * float(_facing)
+		arm_rig.visible = false
+		melee_root.visible = false
+		return
+
+	body_root.rotation = _body_rotation_before_inventory
+	if not _is_dead:
+		arm_rig.visible = _arm_rig_was_visible_before_inventory
+
+
 func _set_facing(direction: int) -> void:
 	if direction == 0:
 		return
@@ -959,9 +1004,11 @@ func _on_interaction_area_exited(area: Area2D) -> void:
 
 func _on_died() -> void:
 	_is_dead = true
+	_is_inventory_open = false
 	_is_sub_weapon_aiming = false
 	_sub_weapon_fire_was_pressed = false
 	velocity = Vector2.ZERO
+	_set_inventory_pose(false)
 	body_root.modulate = Color(0.35, 0.35, 0.35, 1.0)
 	_set_sub_weapon_aim_visual(false)
 	arm_rig.visible = false
@@ -975,6 +1022,7 @@ func apply_damage_reaction(direction: Vector2, _damage: int, _source_position: V
 	var knockback_direction := direction.normalized()
 	if knockback_direction == Vector2.ZERO:
 		knockback_direction = Vector2.RIGHT
+	_pending_damage_direction = knockback_direction
 
 	_damage_knockback_velocity.x = knockback_direction.x * damage_knockback_strength
 	if is_on_floor():
@@ -985,6 +1033,8 @@ func _on_damaged(_amount: int, _current_health: int, _max_health: int) -> void:
 	if _is_dead:
 		return
 
+	damage_feedback.emit(_pending_damage_direction)
+	_pending_damage_direction = Vector2.ZERO
 	_spawn_player_bleed()
 
 	if _damage_flash_tween != null:
