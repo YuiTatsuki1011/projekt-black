@@ -26,6 +26,8 @@ const DETAIL_EQUIPPED_COLOR := Color(0.42, 0.96, 0.56, 1.0)
 const WORKSPACE_PANEL_COLOR := Color(0.055, 0.06, 0.068, 0.78)
 const WORKSPACE_PANEL_BORDER_COLOR := Color(0.36, 0.39, 0.43, 0.92)
 const WORKSPACE_MUTED_COLOR := Color(0.62, 0.66, 0.7, 1.0)
+const UNKNOWN_ITEM_COLOR := Color(0.18, 0.185, 0.195, 1.0)
+const UNKNOWN_ITEM_BORDER_COLOR := Color(0.5, 0.52, 0.55, 0.95)
 const CONTEXT_MENU_COLOR := Color(0.075, 0.08, 0.09, 0.98)
 const CONTEXT_MENU_HOVER_COLOR := Color(0.18, 0.22, 0.25, 1.0)
 const CONTEXT_BUTTON_COLOR := Color(0.105, 0.11, 0.125, 1.0)
@@ -60,6 +62,8 @@ const MAGAZINE_LOAD_INDICATOR_SCRIPT := preload("res://scripts/ui/magazine_load_
 @export var player_menu_panel_height: float = 166.0
 @export var container_panel_height: float = 250.0
 @export var inventory_magazine_load_time_per_round: float = 0.22
+@export var fallback_container_layout_search_time: float = 1.35
+@export var fallback_item_identify_time: float = 1.0
 
 @onready var root: Control = $Root
 @onready var shade: ColorRect = $Root/Shade
@@ -114,10 +118,12 @@ var _damage_flash_tween: Tween
 var _gear_panel: Panel
 var _external_panel: Panel
 var _external_title_label: Label
+var _external_take_all_button: Button
 var _external_grid_root: Control
 var _external_cells_root: Control
 var _external_placement_root: Control
 var _external_items_root: Control
+var _external_status_label: Label
 var _status_value_labels: Dictionary = {}
 var _external_inventory_visible: bool = false
 var _external_container_label: String = "CONTAINER"
@@ -143,6 +149,10 @@ var _magazine_load_job: Dictionary = {}
 var _magazine_load_elapsed: float = 0.0
 var _magazine_load_rounds_total: int = 0
 var _magazine_load_rounds_done: int = 0
+var _container_layout_search_elapsed: float = 0.0
+var _identify_job: Dictionary = {}
+var _identify_elapsed: float = 0.0
+var _identify_duration: float = 1.0
 
 
 func _ready() -> void:
@@ -246,6 +256,8 @@ func _setup_workspace_layout() -> void:
 	_external_title_label = _add_section_title(external_rows, "CONTAINER")
 	_external_title_label.mouse_filter = Control.MOUSE_FILTER_STOP
 	_external_title_label.gui_input.connect(_on_inventory_menu_drag_handle_gui_input)
+	_external_take_all_button = _create_take_all_button()
+	external_rows.add_child(_external_take_all_button)
 	external_rows.add_child(_create_external_grid_view())
 
 
@@ -368,7 +380,25 @@ func _create_external_grid_view() -> Control:
 	_external_items_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	holder.add_child(_external_items_root)
 
+	_external_status_label = Label.new()
+	_external_status_label.name = "ExternalStatusLabel"
+	_external_status_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_external_status_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_external_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_external_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_external_status_label.modulate = WORKSPACE_MUTED_COLOR
+	_external_status_label.add_theme_font_size_override("font_size", 16)
+	_external_status_label.text = ""
+	holder.add_child(_external_status_label)
+
 	return holder
+
+
+func _create_take_all_button() -> Button:
+	var button := _create_context_menu_button("TAKE ALL")
+	button.custom_minimum_size = Vector2(0, 30)
+	button.pressed.connect(_on_take_all_pressed)
+	return button
 
 
 func _input(event: InputEvent) -> void:
@@ -449,6 +479,7 @@ func set_inventory_open(is_open: bool) -> void:
 		_refresh_status_panel()
 	else:
 		_cancel_magazine_load_job()
+		_cancel_identify_job(false)
 		_cancel_drag()
 		_hide_detail_panel()
 		_hide_context_menu()
@@ -487,11 +518,14 @@ func set_external_inventory_visible(is_visible: bool) -> void:
 
 func _set_external_container(container: Node) -> void:
 	_disconnect_external_inventory()
+	_cancel_identify_job(false)
 	_external_container = container
 	_external_inventory = _resolve_external_inventory(container)
 	_external_container_label = _resolve_external_container_label(container)
 	if _external_title_label != null:
 		_external_title_label.text = _external_container_label
+	if _external_container != null and _external_container.has_method("prepare_for_search"):
+		_external_container.call("prepare_for_search")
 
 	if _external_inventory != null and _external_inventory.has_signal("grid_changed"):
 		var refresh_callable := Callable(self, "_refresh_external_inventory")
@@ -500,10 +534,15 @@ func _set_external_container(container: Node) -> void:
 
 	_build_external_grid_cells()
 	_refresh_external_inventory()
+	if not _is_external_layout_known():
+		_start_external_layout_search()
+	else:
+		_start_next_external_identify_job()
 
 
 func _clear_external_container() -> void:
 	_disconnect_external_inventory()
+	_cancel_identify_job(false)
 	_external_inventory_visible = false
 	_external_inventory = null
 	_external_container = null
@@ -514,6 +553,11 @@ func _clear_external_container() -> void:
 	_external_item_nodes.clear()
 	_clear_children(_external_cells_root)
 	_clear_children(_external_placement_root)
+	if is_instance_valid(_external_status_label):
+		_external_status_label.text = ""
+		_external_status_label.visible = false
+	if is_instance_valid(_external_take_all_button):
+		_external_take_all_button.disabled = true
 
 
 func _disconnect_external_inventory() -> void:
@@ -558,6 +602,8 @@ func _resolve_external_container_label(container: Node) -> String:
 
 func _process(delta: float) -> void:
 	_update_magazine_load_job(delta)
+	_update_external_layout_search(delta)
+	_update_identify_job(delta)
 	if _is_open:
 		_layout_realtime_inventory()
 		_refresh_status_panel()
@@ -804,6 +850,16 @@ func _build_external_grid_cells() -> void:
 		return
 
 	_clear_children(_external_cells_root)
+	_clear_children(_external_placement_root)
+	if not _is_external_layout_known():
+		var placeholder_size := Vector2(10 * CELL_PITCH - CELL_GAP, 3 * CELL_PITCH - CELL_GAP)
+		_external_grid_root.custom_minimum_size = placeholder_size
+		_external_grid_root.size = placeholder_size
+		_external_cells_root.size = placeholder_size
+		_external_placement_root.size = placeholder_size
+		_external_items_root.size = placeholder_size
+		_set_external_status("UNSEARCHED")
+		return
 
 	var grid_size := Vector2i(10, 3)
 	if _external_inventory != null and _external_inventory.has_method("get_grid_size"):
@@ -818,6 +874,7 @@ func _build_external_grid_cells() -> void:
 	_external_cells_root.size = grid_pixel_size
 	_external_placement_root.size = grid_pixel_size
 	_external_items_root.size = grid_pixel_size
+	_set_external_status("")
 
 	for y in grid_size.y:
 		for x in grid_size.x:
@@ -869,6 +926,7 @@ func _add_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_item_gui_input.bind(entry_id))
 	_add_magazine_load_indicator_if_needed(item_panel, _inventory, entry_id)
+	_add_identify_indicator_if_needed(item_panel, _inventory, entry_id)
 	if not is_dragged:
 		item_panel.mouse_entered.connect(_show_entry_details.bind(entry_id))
 		item_panel.mouse_exited.connect(_hide_detail_panel)
@@ -885,6 +943,15 @@ func _refresh_external_inventory() -> void:
 	_external_item_nodes.clear()
 	if _external_inventory == null:
 		return
+	if not _is_external_layout_known():
+		_set_external_status("UNSEARCHED")
+		if is_instance_valid(_external_take_all_button):
+			_external_take_all_button.disabled = true
+		return
+
+	_set_external_status("")
+	if is_instance_valid(_external_take_all_button):
+		_external_take_all_button.disabled = false
 
 	for entry in _external_inventory.get_entries():
 		var entry_id: int = int(entry.get("entry_id", -1))
@@ -898,6 +965,65 @@ func _refresh_external_inventory() -> void:
 		if not dragged_entry.is_empty():
 			_add_external_item_node(dragged_entry, true)
 			_update_drag_visual()
+
+
+func _is_external_layout_known() -> bool:
+	if _external_container == null:
+		return true
+	if _external_container.has_method("is_layout_searched"):
+		return bool(_external_container.call("is_layout_searched"))
+
+	return true
+
+
+func _start_external_layout_search() -> void:
+	_container_layout_search_elapsed = 0.0
+	_set_external_status("UNSEARCHED")
+	if is_instance_valid(_external_take_all_button):
+		_external_take_all_button.disabled = true
+
+
+func _update_external_layout_search(delta: float) -> void:
+	if not _is_open or not _external_inventory_visible:
+		return
+	if _external_container == null or _is_external_layout_known():
+		return
+
+	_container_layout_search_elapsed += delta
+	var duration := _get_external_layout_search_duration()
+	var progress_percent := floori(clampf(_container_layout_search_elapsed / duration, 0.0, 1.0) * 100.0)
+	_set_external_status("SEARCHING %d%%" % progress_percent)
+	if _container_layout_search_elapsed < duration:
+		return
+
+	if _external_container.has_method("mark_layout_searched"):
+		_external_container.call("mark_layout_searched")
+	_container_layout_search_elapsed = 0.0
+	_build_external_grid_cells()
+	_refresh_external_inventory()
+	_start_next_external_identify_job()
+
+
+func _get_external_layout_search_duration() -> float:
+	if _external_container != null and _external_container.has_method("get_layout_search_time"):
+		return maxf(float(_external_container.call("get_layout_search_time")), 0.01)
+
+	return maxf(fallback_container_layout_search_time, 0.01)
+
+
+func _get_external_identify_duration() -> float:
+	if _external_container != null and _external_container.has_method("get_item_identify_time"):
+		return maxf(float(_external_container.call("get_item_identify_time")), 0.01)
+
+	return maxf(fallback_item_identify_time, 0.01)
+
+
+func _set_external_status(message: String) -> void:
+	if not is_instance_valid(_external_status_label):
+		return
+
+	_external_status_label.text = message
+	_external_status_label.visible = not message.is_empty()
 
 
 func _add_external_item_node(entry: Dictionary, is_dragged: bool = false) -> void:
@@ -915,6 +1041,7 @@ func _add_external_item_node(entry: Dictionary, is_dragged: bool = false) -> voi
 	item_panel.z_index = 20 if is_dragged else 5
 	item_panel.gui_input.connect(_on_external_item_gui_input.bind(entry_id))
 	_add_magazine_load_indicator_if_needed(item_panel, _external_inventory, entry_id)
+	_add_identify_indicator_if_needed(item_panel, _external_inventory, entry_id)
 	if not is_dragged:
 		item_panel.mouse_entered.connect(_show_external_entry_details.bind(entry_id))
 		item_panel.mouse_exited.connect(_hide_detail_panel)
@@ -936,9 +1063,15 @@ func _create_item_panel(
 	item_panel.custom_minimum_size = Vector2.ZERO
 	item_panel.clip_contents = true
 	item_panel.modulate.a = 0.62 if is_dragged else 1.0
+	var is_identified := _is_metadata_identified(metadata)
+	var panel_color: Color = definition.get("color", Color(0.44, 0.44, 0.46, 1.0))
+	var border_color := ITEM_BORDER_COLOR
+	if not is_identified:
+		panel_color = UNKNOWN_ITEM_COLOR
+		border_color = UNKNOWN_ITEM_BORDER_COLOR
 	item_panel.add_theme_stylebox_override("panel", _make_flat_style(
-		definition.get("color", Color(0.44, 0.44, 0.46, 1.0)),
-		ITEM_BORDER_COLOR,
+		panel_color,
+		border_color,
 		2
 	))
 
@@ -951,8 +1084,9 @@ func _create_item_panel(
 	label.offset_bottom = -2.0
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.text = _get_item_label(definition, quantity, size, metadata)
+	label.text = _get_item_label(definition, quantity, size, metadata) if is_identified else "UNKNOWN"
 	label.add_theme_font_size_override("font_size", 9)
+	label.modulate = DETAIL_TEXT_COLOR if is_identified else DETAIL_MUTED_COLOR
 	item_panel.add_child(label)
 
 	return item_panel
@@ -980,6 +1114,9 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 			else:
 				_show_item_context_menu(_inventory, entry_id, DRAG_SOURCE_INVENTORY)
 			get_viewport().set_input_as_handled()
+		elif mouse_button.button_index == MOUSE_BUTTON_MIDDLE and mouse_button.pressed:
+			_start_identify_entry(_inventory, entry_id)
+			get_viewport().set_input_as_handled()
 
 
 func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
@@ -1003,6 +1140,9 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 				_quick_transfer_entry_between_inventories(_external_inventory, _inventory, entry_id)
 			else:
 				_show_item_context_menu(_external_inventory, entry_id, DRAG_SOURCE_EXTERNAL)
+			get_viewport().set_input_as_handled()
+		elif mouse_button.button_index == MOUSE_BUTTON_MIDDLE and mouse_button.pressed:
+			_start_identify_entry(_external_inventory, entry_id)
 			get_viewport().set_input_as_handled()
 
 
@@ -1089,14 +1229,14 @@ func _begin_split_drag(
 	_drag_item_id = item_id
 	_drag_item_size = entry_size
 	_drag_item_quantity = split_quantity
-	_drag_item_metadata = {}
+	_drag_item_metadata = entry.get("metadata", {})
 	_drag_mouse_offset = get_viewport().get_mouse_position() - item_node.global_position
 	_drag_cell_offset = Vector2i(
 		clampi(floori(local_mouse_position.x / CELL_PITCH), 0, entry_size.x - 1),
 		clampi(floori(local_mouse_position.y / CELL_PITCH), 0, entry_size.y - 1)
 	)
 
-	_equipment_drag_node = _create_item_panel(definition, split_quantity, entry_size, true)
+	_equipment_drag_node = _create_item_panel(definition, split_quantity, entry_size, true, _drag_item_metadata)
 	_equipment_drag_node.z_index = 30
 	_equipment_drag_node.global_position = item_node.global_position
 	root.add_child(_equipment_drag_node)
@@ -1278,7 +1418,12 @@ func _refresh_drag_item_node() -> void:
 	for child in item_node.get_children():
 		if child is Label:
 			var label := child as Label
-			label.text = _get_item_label(definition, _drag_item_quantity, _drag_item_size, _drag_item_metadata)
+			label.text = _get_item_label(
+				definition,
+				_drag_item_quantity,
+				_drag_item_size,
+				_drag_item_metadata
+			) if _is_metadata_identified(_drag_item_metadata) else "UNKNOWN"
 			break
 
 
@@ -1500,7 +1645,7 @@ func _finish_split_drag(target_cell: Vector2i, external_target_cell: Vector2i) -
 	elif _is_mouse_inside_external_grid() and _external_inventory != null:
 		did_place = _place_split_drag_in_inventory(_external_inventory, external_target_cell)
 	elif not _is_mouse_inside_any_inventory_frame():
-		if _drop_item_to_world(_drag_item_id, _drag_item_quantity):
+		if _drop_item_to_world(_drag_item_id, _drag_item_quantity, _drag_item_metadata):
 			_drag_item_quantity = 0
 			did_place = true
 
@@ -1521,7 +1666,8 @@ func _place_split_drag_in_inventory(target_inventory: Node, target_cell: Vector2
 			_drag_item_id,
 			target_cell,
 			_drag_item_size,
-			-1
+			-1,
+			_drag_item_metadata
 		))
 
 	if target_stack_id >= 0 and target_inventory.has_method("add_quantity_to_entry"):
@@ -1542,7 +1688,8 @@ func _place_split_drag_in_inventory(target_inventory: Node, target_cell: Vector2
 		_drag_item_id,
 		_drag_item_quantity,
 		target_cell,
-		_drag_item_size
+		_drag_item_size,
+		_drag_item_metadata
 	))
 	if added_quantity <= 0:
 		return false
@@ -1570,7 +1717,8 @@ func _return_split_drag_to_source() -> void:
 			source_inventory,
 			_drag_item_id,
 			remaining_quantity,
-			_drag_item_size
+			_drag_item_size,
+			_drag_item_metadata
 		)
 
 	_drag_item_quantity = maxi(remaining_quantity, 0)
@@ -1615,19 +1763,20 @@ func _transfer_entry_between_inventories(
 	var quantity: int = int(entry.get("quantity", 1))
 	var original_cell: Vector2i = entry.get("position", Vector2i.ZERO)
 	var original_size: Vector2i = entry.get("size", Vector2i.ONE)
+	var metadata: Dictionary = entry.get("metadata", {})
 
 	var removed_entry: Dictionary = source_inventory.remove_entry(entry_id)
 	if removed_entry.is_empty():
 		return false
 
-	var added_quantity: int = target_inventory.add_item_at(item_id, quantity, target_cell, item_size)
+	var added_quantity: int = target_inventory.add_item_at(item_id, quantity, target_cell, item_size, metadata)
 	if added_quantity == quantity:
 		return true
 
 	if added_quantity > 0:
 		target_inventory.remove_item(item_id, added_quantity)
 
-	source_inventory.add_item_at(item_id, quantity, original_cell, original_size)
+	source_inventory.add_item_at(item_id, quantity, original_cell, original_size, metadata)
 	_show_warning("NO SPACE")
 	return false
 
@@ -1653,8 +1802,9 @@ func _quick_transfer_entry_between_inventories(
 	var quantity: int = int(entry.get("quantity", 1))
 	var original_cell: Vector2i = entry.get("position", Vector2i.ZERO)
 	var item_size: Vector2i = entry.get("size", Vector2i.ONE)
+	var metadata: Dictionary = entry.get("metadata", {})
 
-	if not _can_inventory_accept_entry(target_inventory, item_id, quantity, item_size):
+	if not _can_inventory_accept_entry(target_inventory, item_id, quantity, item_size, metadata):
 		_show_warning("NO SPACE")
 		return false
 
@@ -1662,7 +1812,7 @@ func _quick_transfer_entry_between_inventories(
 	if removed_entry.is_empty():
 		return false
 
-	var added_quantity: int = _add_entry_to_inventory(target_inventory, item_id, quantity, item_size)
+	var added_quantity: int = _add_entry_to_inventory(target_inventory, item_id, quantity, item_size, metadata)
 	if added_quantity == quantity:
 		_hide_detail_panel()
 		_refresh()
@@ -1671,21 +1821,63 @@ func _quick_transfer_entry_between_inventories(
 
 	if added_quantity > 0 and target_inventory.has_method("remove_item"):
 		target_inventory.remove_item(item_id, added_quantity)
-	source_inventory.add_item_at(item_id, quantity, original_cell, item_size)
+	source_inventory.add_item_at(item_id, quantity, original_cell, item_size, metadata)
 	_show_warning("NO SPACE")
 	_refresh()
 	_refresh_external_inventory()
 	return false
 
 
+func _on_take_all_pressed() -> void:
+	if _external_inventory == null or _inventory == null:
+		_show_warning("NO CONTAINER")
+		return
+	if not _is_external_layout_known():
+		_show_warning("SEARCH FIRST")
+		return
+
+	var entries: Array[Dictionary] = _external_inventory.get_entries()
+	entries.sort_custom(Callable(self, "_compare_entry_dictionaries_by_grid_position"))
+	var moved_count := 0
+	var blocked_count := 0
+	for entry in entries:
+		var entry_id := int(entry.get("entry_id", -1))
+		if entry_id < 0:
+			continue
+		if _quick_transfer_entry_between_inventories(_external_inventory, _inventory, entry_id):
+			moved_count += 1
+		else:
+			blocked_count += 1
+
+	if moved_count <= 0 and blocked_count > 0:
+		_show_warning("NO SPACE")
+	elif moved_count > 0 and blocked_count > 0:
+		_show_warning("PARTIAL")
+
+	_refresh()
+	_refresh_external_inventory()
+
+
+func _compare_entry_dictionaries_by_grid_position(a: Dictionary, b: Dictionary) -> bool:
+	var a_position: Vector2i = a.get("position", Vector2i.ZERO)
+	var b_position: Vector2i = b.get("position", Vector2i.ZERO)
+	if a_position.y == b_position.y:
+		return a_position.x < b_position.x
+
+	return a_position.y < b_position.y
+
+
 func _can_inventory_accept_entry(
 	target_inventory: Node,
 	item_id: StringName,
 	quantity: int,
-	item_size: Vector2i
+	item_size: Vector2i,
+	metadata: Dictionary = {}
 ) -> bool:
 	if target_inventory == null:
 		return false
+	if not metadata.is_empty() and target_inventory.has_method("can_add_item_with_size"):
+		return bool(target_inventory.call("can_add_item_with_size", item_id, quantity, item_size))
 	if target_inventory.has_method("can_add_item_with_size"):
 		return bool(target_inventory.call("can_add_item_with_size", item_id, quantity, item_size))
 	if target_inventory.has_method("can_add_item"):
@@ -1698,10 +1890,13 @@ func _add_entry_to_inventory(
 	target_inventory: Node,
 	item_id: StringName,
 	quantity: int,
-	item_size: Vector2i
+	item_size: Vector2i,
+	metadata: Dictionary = {}
 ) -> int:
 	if target_inventory == null:
 		return 0
+	if not metadata.is_empty() and target_inventory.has_method("add_item_with_metadata_quantity"):
+		return int(target_inventory.call("add_item_with_metadata_quantity", item_id, quantity, metadata, item_size))
 	if target_inventory.has_method("add_item_with_size"):
 		return int(target_inventory.call("add_item_with_size", item_id, quantity, item_size))
 	if target_inventory.has_method("add_item"):
@@ -1727,12 +1922,14 @@ func _try_stack_entry_at_cell(
 		return false
 
 	var item_id: StringName = entry.get("item_id", &"")
+	var metadata: Dictionary = entry.get("metadata", {})
 	var ignored_entry_id := entry_id if source_inventory == target_inventory else -1
 	var target_entry_id: int = target_inventory.get_stack_target_entry_id(
 		item_id,
 		target_cell,
 		item_size,
-		ignored_entry_id
+		ignored_entry_id,
+		metadata
 	)
 	if target_entry_id < 0:
 		return false
@@ -1766,7 +1963,8 @@ func _can_stack_dragged_entry_at_cell(
 		_drag_item_id,
 		target_cell,
 		item_size,
-		ignored_entry_id
+		ignored_entry_id,
+		_drag_item_metadata
 	)) >= 0
 
 
@@ -1958,7 +2156,146 @@ func _is_magazine_load_target(target_inventory: Node, entry_id: int) -> bool:
 
 
 func _is_magazine_action_target(target_inventory: Node, entry_id: int) -> bool:
-	return _is_magazine_load_target(target_inventory, entry_id)
+	return _is_magazine_load_target(target_inventory, entry_id) or _is_identify_action_target(target_inventory, entry_id)
+
+
+func _start_next_external_identify_job() -> bool:
+	if not _is_open or not _external_inventory_visible or _external_inventory == null:
+		return false
+	if not _is_external_layout_known():
+		return false
+	if not _identify_job.is_empty():
+		return false
+	if not _external_inventory.has_method("get_first_unidentified_entry_id"):
+		return false
+
+	var entry_id: int = int(_external_inventory.call("get_first_unidentified_entry_id"))
+	if entry_id < 0:
+		return false
+
+	return _start_identify_entry(_external_inventory, entry_id, _get_external_identify_duration())
+
+
+func _start_identify_entry(target_inventory: Node, entry_id: int, duration: float = -1.0) -> bool:
+	if target_inventory == null or not target_inventory.has_method("set_entry_identified"):
+		return false
+	if _is_inventory_entry_identified(target_inventory, entry_id):
+		return false
+
+	_cancel_identify_job(false)
+	_identify_job = {
+		"target_inventory": target_inventory,
+		"target_entry_id": entry_id,
+	}
+	_identify_elapsed = 0.0
+	var resolved_duration := duration
+	if resolved_duration <= 0.0:
+		resolved_duration = _get_external_identify_duration() if target_inventory == _external_inventory else fallback_item_identify_time
+	_identify_duration = maxf(resolved_duration, 0.01)
+	_hide_detail_panel()
+	_refresh()
+	_refresh_external_inventory()
+	return true
+
+
+func _update_identify_job(delta: float) -> void:
+	if _identify_job.is_empty():
+		return
+	if not _is_open:
+		_cancel_identify_job(false)
+		return
+
+	var target_inventory := _identify_job.get("target_inventory") as Node
+	var target_entry_id := int(_identify_job.get("target_entry_id", -1))
+	if target_inventory == null or not target_inventory.has_method("get_entry"):
+		_cancel_identify_job()
+		return
+
+	var entry: Dictionary = target_inventory.call("get_entry", target_entry_id)
+	if entry.is_empty():
+		_cancel_identify_job()
+		return
+	if _is_entry_dictionary_identified(entry):
+		_finish_identify_job(target_inventory)
+		return
+
+	_identify_elapsed += delta
+	if _identify_elapsed < _identify_duration:
+		_update_identify_indicator()
+		return
+
+	target_inventory.call("set_entry_identified", target_entry_id, true)
+	_finish_identify_job(target_inventory)
+
+
+func _finish_identify_job(target_inventory: Node) -> void:
+	var was_external := target_inventory == _external_inventory
+	_identify_job.clear()
+	_identify_elapsed = 0.0
+	_identify_duration = 1.0
+	_refresh()
+	_refresh_external_inventory()
+	if was_external:
+		_start_next_external_identify_job()
+
+
+func _cancel_identify_job(should_refresh: bool = true) -> void:
+	if _identify_job.is_empty():
+		return
+
+	_identify_job.clear()
+	_identify_elapsed = 0.0
+	_identify_duration = 1.0
+	if should_refresh:
+		_refresh()
+		_refresh_external_inventory()
+
+
+func _is_identify_action_target(target_inventory: Node, entry_id: int) -> bool:
+	if _identify_job.is_empty():
+		return false
+
+	return target_inventory == _identify_job.get("target_inventory") and entry_id == int(_identify_job.get("target_entry_id", -1))
+
+
+func _get_identify_progress() -> float:
+	if _identify_job.is_empty():
+		return 0.0
+
+	return clampf(_identify_elapsed / maxf(_identify_duration, 0.01), 0.0, 1.0)
+
+
+func _add_identify_indicator_if_needed(item_panel: Control, target_inventory: Node, entry_id: int) -> void:
+	if not _is_identify_action_target(target_inventory, entry_id):
+		return
+
+	var indicator := MAGAZINE_LOAD_INDICATOR_SCRIPT.new() as Control
+	indicator.name = "IdentifyIndicator"
+	indicator.set_anchors_preset(Control.PRESET_FULL_RECT)
+	indicator.offset_left = 0.0
+	indicator.offset_top = 0.0
+	indicator.offset_right = 0.0
+	indicator.offset_bottom = 0.0
+	indicator.set("progress", _get_identify_progress())
+	item_panel.add_child(indicator)
+
+
+func _update_identify_indicator() -> void:
+	if _identify_job.is_empty():
+		return
+
+	var target_inventory := _identify_job.get("target_inventory") as Node
+	var target_entry_id := int(_identify_job.get("target_entry_id", -1))
+	var item_panel := _get_item_panel_for_inventory(target_inventory, target_entry_id)
+	if item_panel == null:
+		return
+
+	var indicator := item_panel.get_node_or_null("IdentifyIndicator") as Control
+	if indicator == null:
+		_add_identify_indicator_if_needed(item_panel, target_inventory, target_entry_id)
+		indicator = item_panel.get_node_or_null("IdentifyIndicator") as Control
+	if indicator != null:
+		indicator.set("progress", _get_identify_progress())
 
 
 func _get_magazine_load_progress() -> float:
@@ -2029,6 +2366,8 @@ func _show_item_context_menu(target_inventory: Node, entry_id: int, source: Stri
 	_hide_split_dialog()
 
 	var actions: Array[Dictionary] = []
+	if not _is_inventory_entry_identified(target_inventory, entry_id):
+		actions.append({"label": "Identify", "action": &"identify"})
 	if _can_inspect_entry(target_inventory, entry_id):
 		actions.append({"label": "Inspect", "action": &"inspect"})
 	if _can_split_stack_entry(target_inventory, entry_id):
@@ -2071,7 +2410,9 @@ func _show_item_context_menu(target_inventory: Node, entry_id: int, source: Stri
 		var action_name: StringName = action.get("action", &"none")
 		var button := _create_context_menu_button(str(action.get("label", "Action")))
 		button.disabled = action_name == &"none"
-		if action_name == &"inspect":
+		if action_name == &"identify":
+			button.pressed.connect(Callable(self, "_on_context_identify_entry_pressed").bind(target_inventory, entry_id))
+		elif action_name == &"inspect":
 			button.pressed.connect(Callable(self, "_on_context_inspect_entry_pressed").bind(target_inventory, entry_id))
 		elif action_name == &"split":
 			button.pressed.connect(Callable(self, "_on_context_split_pressed").bind(target_inventory, entry_id))
@@ -2097,6 +2438,12 @@ func _create_context_menu_button(text: String) -> Button:
 	button.add_theme_stylebox_override("pressed", _make_flat_style(Color(0.22, 0.28, 0.32, 1.0), Color.TRANSPARENT, 0))
 	button.add_theme_stylebox_override("disabled", _make_flat_style(Color(0.08, 0.085, 0.095, 1.0), Color.TRANSPARENT, 0))
 	return button
+
+
+func _on_context_identify_entry_pressed(target_inventory: Node, entry_id: int) -> void:
+	_hide_context_menu()
+	_hide_split_dialog()
+	_start_identify_entry(target_inventory, entry_id)
 
 
 func _on_context_inspect_entry_pressed(target_inventory: Node, entry_id: int) -> void:
@@ -2329,6 +2676,8 @@ func _can_split_stack_entry(target_inventory: Node, entry_id: int) -> bool:
 func _can_inspect_entry(target_inventory: Node, entry_id: int) -> bool:
 	if target_inventory == null or not target_inventory.has_method("get_entry"):
 		return false
+	if not _is_inventory_entry_identified(target_inventory, entry_id):
+		return false
 
 	var entry: Dictionary = target_inventory.get_entry(entry_id)
 	if entry.is_empty():
@@ -2336,6 +2685,26 @@ func _can_inspect_entry(target_inventory: Node, entry_id: int) -> bool:
 
 	var item_id: StringName = entry.get("item_id", &"")
 	return _load_weapon_resource_for_item(item_id) != null
+
+
+func _is_inventory_entry_identified(target_inventory: Node, entry_id: int) -> bool:
+	if target_inventory == null:
+		return true
+	if target_inventory.has_method("is_entry_identified"):
+		return bool(target_inventory.call("is_entry_identified", entry_id))
+	if not target_inventory.has_method("get_entry"):
+		return true
+
+	var entry: Dictionary = target_inventory.call("get_entry", entry_id)
+	return _is_entry_dictionary_identified(entry)
+
+
+func _is_entry_dictionary_identified(entry: Dictionary) -> bool:
+	return _is_metadata_identified(entry.get("metadata", {}))
+
+
+func _is_metadata_identified(metadata: Dictionary) -> bool:
+	return bool(metadata.get("identified", true))
 
 
 func _show_weapon_inspect_for_entry(target_inventory: Node, entry_id: int) -> void:
@@ -3667,6 +4036,10 @@ func _show_entry_details(entry_id: int) -> void:
 
 	_hover_entry_id = entry_id
 	_hover_equipment_slot = &""
+	if not _is_entry_dictionary_identified(entry):
+		_show_unknown_item_details(entry)
+		return
+
 	_show_item_details(
 		entry.get("item_id", &""),
 		int(entry.get("quantity", 1)),
@@ -3688,6 +4061,10 @@ func _show_external_entry_details(entry_id: int) -> void:
 
 	_hover_entry_id = -1
 	_hover_equipment_slot = &""
+	if not _is_entry_dictionary_identified(entry):
+		_show_unknown_item_details(entry)
+		return
+
 	_show_item_details(
 		entry.get("item_id", &""),
 		int(entry.get("quantity", 1)),
@@ -3709,6 +4086,25 @@ func _show_equipment_slot_details(slot: StringName) -> void:
 		return
 
 	_show_item_details(item_id, 1, false)
+
+
+func _show_unknown_item_details(entry: Dictionary) -> void:
+	_ensure_detail_panel()
+	_set_equipped_detail_visible(false)
+	var item_size: Vector2i = entry.get("size", Vector2i.ONE)
+	var previous_rows := _detail_rows
+	_detail_rows = _selected_detail_rows
+	_clear_children(_detail_rows)
+	_add_detail_title("Unknown Item")
+	_add_detail_note("Unidentified  |  %dx%d" % [
+		item_size.x,
+		item_size.y,
+	])
+	_add_detail_separator()
+	_add_detail_stat_row("Status", "Needs identification")
+	_detail_rows = previous_rows
+	_detail_panel.visible = true
+	_position_detail_panel()
 
 
 func _show_item_details(

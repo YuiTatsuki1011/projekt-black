@@ -20,6 +20,7 @@ enum ShootState {
 @export var projectile_damage: int = 14
 @export var projectile_speed: float = 540.0
 @export var telegraph_length: float = 760.0
+@export var search_memory_time: float = 2.4
 @export_flags_2d_physics var line_of_sight_blocker_mask: int = 1
 @export var hit_vfx_scene: PackedScene
 @export var death_vfx_scene: PackedScene
@@ -44,6 +45,9 @@ var _flash_tween: Tween
 var _shoot_state: ShootState = ShootState.RECOVERY
 var _shot_timer: float = 0.0
 var _locked_direction: Vector2 = Vector2.LEFT
+var _has_last_seen_target: bool = false
+var _last_seen_target_position: Vector2 = Vector2.ZERO
+var _awareness_timer: float = 0.0
 
 
 func _ready() -> void:
@@ -67,6 +71,7 @@ func _physics_process(delta: float) -> void:
 	if _target == null or not is_instance_valid(_target):
 		_resolve_target()
 
+	_update_target_awareness(delta)
 	_update_shoot_state(delta)
 	_update_velocity()
 	_knockback_velocity = _knockback_velocity.move_toward(Vector2.ZERO, knockback_recovery * delta)
@@ -95,19 +100,22 @@ func _resolve_target() -> void:
 
 func _update_velocity() -> void:
 	velocity = _knockback_velocity
-	if _target == null:
+	if not _has_last_seen_target:
 		return
 
-	var to_target := _target.global_position - global_position
+	var visible_target := _is_target_visible()
+	var target_position := _target.global_position if visible_target else _last_seen_target_position
+	var to_target := target_position - global_position
 	var target_distance := to_target.length()
-	if target_distance <= 0.01 or target_distance > detection_range:
+	if target_distance <= 0.01:
 		return
 
 	var target_direction := to_target / target_distance
-	var has_line_of_sight := _has_line_of_sight_to_target()
-	if target_distance < retreat_range:
+	if visible_target and target_distance < retreat_range:
 		velocity -= target_direction * move_speed
-	elif target_distance > preferred_range or not has_line_of_sight:
+	elif visible_target and target_distance > preferred_range:
+		velocity += target_direction * move_speed
+	elif not visible_target and target_distance > 24.0:
 		velocity += target_direction * move_speed
 
 
@@ -193,10 +201,11 @@ func _update_unlocked_aim() -> void:
 
 
 func _get_direction_to_target() -> Vector2:
-	if _target == null or not is_instance_valid(_target):
+	var aim_position := _get_aim_position()
+	if aim_position == Vector2.INF:
 		return _locked_direction
 
-	return (_target.global_position - muzzle.global_position).normalized()
+	return (aim_position - muzzle.global_position).normalized()
 
 
 func _set_aim_direction(direction: Vector2) -> void:
@@ -217,12 +226,45 @@ func _set_aim_direction(direction: Vector2) -> void:
 
 
 func _can_shoot_target() -> bool:
+	return _is_target_visible()
+
+
+func _update_target_awareness(delta: float) -> void:
+	if _target == null or not is_instance_valid(_target):
+		_has_last_seen_target = false
+		_awareness_timer = 0.0
+		return
+
+	if _is_target_visible():
+		_has_last_seen_target = true
+		_last_seen_target_position = _target.global_position
+		_awareness_timer = search_memory_time
+		return
+
+	if not _has_last_seen_target:
+		return
+
+	_awareness_timer -= delta
+	if _awareness_timer <= 0.0 or global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
+		_has_last_seen_target = false
+
+
+func _is_target_visible() -> bool:
 	if _target == null or not is_instance_valid(_target):
 		return false
 	if global_position.distance_squared_to(_target.global_position) > detection_range * detection_range:
 		return false
 
 	return _has_line_of_sight_to_target()
+
+
+func _get_aim_position() -> Vector2:
+	if _target != null and is_instance_valid(_target) and _is_target_visible():
+		return _target.global_position
+	if _has_last_seen_target:
+		return _last_seen_target_position
+
+	return Vector2.INF
 
 
 func _has_line_of_sight_to_target() -> bool:

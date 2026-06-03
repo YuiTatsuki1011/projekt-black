@@ -126,6 +126,43 @@ func add_item_with_metadata(
 	return add_item_at(item_id, 1, position, item_size, metadata) == 1
 
 
+func add_item_with_metadata_quantity(
+	item_id: StringName,
+	quantity: int,
+	metadata: Dictionary,
+	size_override: Vector2i = Vector2i.ZERO
+) -> int:
+	if quantity <= 0:
+		return 0
+	if metadata.is_empty():
+		return add_item_with_size(item_id, quantity, size_override)
+
+	var remaining_quantity := quantity
+	var added_quantity := 0
+	var definition: Dictionary = get_item_definition(item_id)
+	var item_size: Vector2i = definition.get("size", Vector2i.ONE)
+	if size_override.x > 0 and size_override.y > 0:
+		item_size = size_override
+
+	var is_stackable: bool = bool(definition.get("stackable", false))
+	var max_stack: int = int(definition.get("max_stack", 1))
+	while remaining_quantity > 0:
+		var position := _find_first_free_position(item_size)
+		if position.x < 0:
+			break
+
+		var stack_quantity: int = mini(max_stack, remaining_quantity) if is_stackable else 1
+		_create_entry(item_id, position, item_size, stack_quantity, metadata)
+		remaining_quantity -= stack_quantity
+		added_quantity += stack_quantity
+
+	if added_quantity > 0:
+		_set_total_quantity(item_id, get_quantity(item_id) + added_quantity)
+		grid_changed.emit()
+
+	return added_quantity
+
+
 func can_add_item(item_id: StringName, quantity: int = 1) -> bool:
 	return can_add_item_with_size(item_id, quantity)
 
@@ -248,7 +285,13 @@ func split_entry(entry_id: int, split_quantity: int = -1) -> Dictionary:
 	entry["quantity"] = source_quantity - quantity_to_split
 	_entries[entry_id] = entry
 
-	var new_entry_id: int = _create_entry(item_id, new_position, item_size, quantity_to_split)
+	var new_entry_id: int = _create_entry(
+		item_id,
+		new_position,
+		item_size,
+		quantity_to_split,
+		entry.get("metadata", {})
+	)
 	grid_changed.emit()
 	return get_entry(new_entry_id)
 
@@ -443,6 +486,51 @@ func is_magazine_entry_checked(entry_id: int) -> bool:
 	return bool(magazine_info.get("is_checked", false)) if not magazine_info.is_empty() else false
 
 
+func is_entry_identified(entry_id: int) -> bool:
+	if not _entries.has(entry_id):
+		return true
+
+	var metadata: Dictionary = _entries[entry_id].get("metadata", {})
+	return bool(metadata.get("identified", true))
+
+
+func set_entry_identified(entry_id: int, is_identified: bool = true) -> bool:
+	if not _entries.has(entry_id):
+		return false
+
+	var metadata := get_entry_metadata(entry_id)
+	metadata["identified"] = is_identified
+	return set_entry_metadata(entry_id, metadata)
+
+
+func set_all_entries_identified(is_identified: bool = true) -> void:
+	var changed := false
+	for entry_id in _entries:
+		var entry: Dictionary = _entries[entry_id]
+		var metadata: Dictionary = entry.get("metadata", {})
+		if bool(metadata.get("identified", true)) == is_identified:
+			continue
+
+		metadata["identified"] = is_identified
+		entry["metadata"] = metadata
+		_entries[entry_id] = entry
+		changed = true
+
+	if changed:
+		grid_changed.emit()
+
+
+func get_first_unidentified_entry_id() -> int:
+	var entries := get_entries()
+	entries.sort_custom(Callable(self, "_compare_entries_by_grid_position"))
+	for entry in entries:
+		var metadata: Dictionary = entry.get("metadata", {})
+		if not bool(metadata.get("identified", true)):
+			return int(entry.get("entry_id", -1))
+
+	return -1
+
+
 func set_entry_metadata(entry_id: int, metadata: Dictionary) -> bool:
 	if not _entries.has(entry_id):
 		return false
@@ -516,7 +604,8 @@ func get_stack_target_entry_id(
 	item_id: StringName,
 	position: Vector2i,
 	size: Vector2i,
-	ignored_entry_id: int = -1
+	ignored_entry_id: int = -1,
+	metadata: Dictionary = {}
 ) -> int:
 	var definition: Dictionary = get_item_definition(item_id)
 	if not bool(definition.get("stackable", false)):
@@ -531,6 +620,8 @@ func get_stack_target_entry_id(
 
 			var entry: Dictionary = _entries.get(entry_id, {})
 			if entry.get("item_id", &"") != item_id:
+				continue
+			if not _are_metadata_stack_compatible(entry.get("metadata", {}), metadata):
 				continue
 			if int(entry.get("quantity", 0)) >= max_stack:
 				continue
@@ -550,6 +641,11 @@ func stack_entry_onto_entry(source_entry_id: int, target_entry_id: int) -> int:
 	var target_entry: Dictionary = _entries[target_entry_id]
 	var item_id: StringName = source_entry.get("item_id", &"")
 	if item_id == &"" or target_entry.get("item_id", &"") != item_id:
+		return 0
+	if not _are_metadata_stack_compatible(
+		source_entry.get("metadata", {}),
+		target_entry.get("metadata", {})
+	):
 		return 0
 
 	var definition: Dictionary = get_item_definition(item_id)
@@ -772,3 +868,7 @@ func _is_area_free_in_rects(position: Vector2i, size: Vector2i, occupied_rects: 
 			return false
 
 	return true
+
+
+func _are_metadata_stack_compatible(left: Dictionary, right: Dictionary) -> bool:
+	return left == right

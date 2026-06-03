@@ -17,6 +17,8 @@ enum AttackState {
 @export var attack_active_time: float = 0.16
 @export var attack_recovery_time: float = 0.55
 @export var attack_lunge_speed: float = 180.0
+@export var search_memory_time: float = 2.0
+@export_flags_2d_physics var line_of_sight_blocker_mask: int = 1
 @export var desired_target_separation: float = 36.0
 @export var separation_push_speed: float = 420.0
 @export var hit_vfx_scene: PackedScene
@@ -42,6 +44,9 @@ var _attack_state: AttackState = AttackState.CHASE
 var _attack_timer: float = 0.0
 var _attack_direction: Vector2 = Vector2.RIGHT
 var _has_hit_this_attack: bool = false
+var _has_last_seen_target: bool = false
+var _last_seen_target_position: Vector2 = Vector2.ZERO
+var _awareness_timer: float = 0.0
 
 
 func _ready() -> void:
@@ -63,6 +68,7 @@ func _physics_process(delta: float) -> void:
 	if _target == null or not is_instance_valid(_target):
 		_resolve_target()
 
+	_update_target_awareness(delta)
 	_update_attack_state(delta)
 	_update_velocity()
 	_knockback_velocity = _knockback_velocity.move_toward(Vector2.ZERO, knockback_recovery * delta)
@@ -91,17 +97,17 @@ func _resolve_target() -> void:
 
 func _update_velocity() -> void:
 	velocity = _knockback_velocity
-	if _target == null:
+	if not _has_last_seen_target:
 		return
 
-	var to_target := _target.global_position - global_position
+	var to_target := _last_seen_target_position - global_position
 	var target_distance := to_target.length()
 	var target_direction := to_target / target_distance if target_distance > 0.01 else _attack_direction
 	_apply_separation_velocity(target_distance, target_direction)
 
 	match _attack_state:
 		AttackState.CHASE:
-			if target_distance <= aggro_range and target_distance > desired_target_separation:
+			if target_distance > desired_target_separation:
 				velocity += target_direction * move_speed
 				_set_facing(to_target)
 		AttackState.ACTIVE:
@@ -156,7 +162,7 @@ func _update_attack_state(delta: float) -> void:
 
 
 func _try_start_attack() -> void:
-	if _target == null:
+	if _target == null or not _is_target_visible():
 		return
 
 	var to_target := _target.global_position - global_position
@@ -171,6 +177,50 @@ func _try_start_attack() -> void:
 	_attack_timer = attack_windup_time
 	_has_hit_this_attack = false
 	body_visual.scale = Vector2(body_visual.scale.x * 1.08, 0.92)
+
+
+func _update_target_awareness(delta: float) -> void:
+	if _target == null or not is_instance_valid(_target):
+		_has_last_seen_target = false
+		_awareness_timer = 0.0
+		return
+
+	if _is_target_visible():
+		_has_last_seen_target = true
+		_last_seen_target_position = _target.global_position
+		_awareness_timer = search_memory_time
+		return
+
+	if not _has_last_seen_target:
+		return
+
+	_awareness_timer -= delta
+	if _awareness_timer <= 0.0 or global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
+		_has_last_seen_target = false
+
+
+func _is_target_visible() -> bool:
+	if _target == null or not is_instance_valid(_target):
+		return false
+	if global_position.distance_squared_to(_target.global_position) > aggro_range * aggro_range:
+		return false
+
+	return _has_line_of_sight_to_target()
+
+
+func _has_line_of_sight_to_target() -> bool:
+	if _target == null or not is_instance_valid(_target):
+		return false
+
+	var space_state := get_world_2d().direct_space_state
+	var query := PhysicsRayQueryParameters2D.new()
+	query.from = global_position
+	query.to = _target.global_position
+	query.collision_mask = line_of_sight_blocker_mask
+	query.exclude = [get_rid()]
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	return space_state.intersect_ray(query).is_empty()
 
 
 func _enter_active_attack() -> void:
