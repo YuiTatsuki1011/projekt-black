@@ -51,6 +51,9 @@ enum AwarenessState {
 @export var gunshot_hearing_confidence: float = 0.7
 @export var hit_confidence: float = 0.9
 @export var visual_tracking_turn_speed_degrees: float = 500.0
+@export var pursuit_prediction_time: float = 0.55
+@export var max_pursuit_prediction_distance: float = 96.0
+@export var combat_peripheral_tracking_time: float = 0.5
 @export var debug_vision_visible: bool = true
 @export var debug_vision_focus_distance: float = 440.0
 @export var debug_vision_segments: int = 24
@@ -93,6 +96,10 @@ var _awareness_state: AwarenessState = AwarenessState.IDLE
 var _stimulus_confidence: float = 0.0
 var _suspicious_timer: float = 0.0
 var _last_stimulus_type: StringName = &"none"
+var _has_visual_target_sample: bool = false
+var _last_visual_target_position: Vector2 = Vector2.ZERO
+var _estimated_target_velocity: Vector2 = Vector2.ZERO
+var _combat_peripheral_tracking_timer: float = 0.0
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -404,7 +411,10 @@ func _update_target_awareness(delta: float) -> void:
 			if _detection_progress < 1.0:
 				return
 
-		_receive_target_stimulus(_target.global_position, 1.0, &"visual", true)
+		var confirmed_position := _target.global_position
+		_update_visual_target_motion(confirmed_position, delta)
+		_receive_target_stimulus(_get_predicted_pursuit_position(confirmed_position), 1.0, &"visual", true)
+		_combat_peripheral_tracking_timer = combat_peripheral_tracking_time
 		_direct_sighting_share_timer += delta
 		if _direct_sighting_share_timer >= alert_share_delay and not _has_shared_current_sighting:
 			_share_player_sighting(_last_seen_target_position)
@@ -416,9 +426,20 @@ func _update_target_awareness(delta: float) -> void:
 		_detection_progress = maxf(0.0, _detection_progress - delta / maxf(detection_decay_time, 0.01))
 		return
 
+	if _awareness_state == AwarenessState.COMBAT and _can_track_target_peripherally():
+		_combat_peripheral_tracking_timer -= delta
+		var tracked_position := _target.global_position
+		_update_visual_target_motion(tracked_position, delta)
+		_last_seen_target_position = _get_predicted_pursuit_position(tracked_position)
+		_awareness_timer = search_memory_time
+		_is_investigating_last_seen = false
+		_hide_last_seen_marker()
+		return
+
 	if _awareness_state == AwarenessState.COMBAT:
 		_awareness_state = AwarenessState.SEARCH
 		_detection_progress = 0.0
+		_combat_peripheral_tracking_timer = 0.0
 
 	_show_last_seen_marker_if_all_targets_lost(_last_seen_target_position)
 	if _awareness_state == AwarenessState.SUSPICIOUS:
@@ -433,6 +454,8 @@ func _update_target_awareness(delta: float) -> void:
 
 	if global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
 		_awareness_state = AwarenessState.SEARCH
+		if _estimated_target_velocity.length_squared() > 1.0:
+			_turn_aim_toward(_estimated_target_velocity.normalized(), delta)
 		if not _is_investigating_last_seen:
 			_is_investigating_last_seen = true
 			_investigation_timer = investigation_time
@@ -482,6 +505,36 @@ func _turn_aim_toward(direction: Vector2, delta: float) -> void:
 		_set_aim_direction(desired_direction)
 	else:
 		_set_aim_direction(current_direction.rotated(signf(angle_delta) * max_turn))
+
+
+func _can_track_target_peripherally() -> bool:
+	if _target == null or not is_instance_valid(_target):
+		return false
+	if _combat_peripheral_tracking_timer <= 0.0:
+		return false
+	if global_position.distance_squared_to(_target.global_position) > detection_range * detection_range:
+		return false
+
+	return _has_line_of_sight_to_target()
+
+
+func _update_visual_target_motion(target_position: Vector2, delta: float) -> void:
+	if _has_visual_target_sample and delta > 0.001:
+		var sample_velocity := (target_position - _last_visual_target_position) / delta
+		_estimated_target_velocity = _estimated_target_velocity.lerp(sample_velocity, 0.45)
+	_last_visual_target_position = target_position
+	_has_visual_target_sample = true
+
+
+func _get_predicted_pursuit_position(target_position: Vector2) -> Vector2:
+	if _estimated_target_velocity.length_squared() <= 1.0:
+		return target_position
+
+	var lead := _estimated_target_velocity * pursuit_prediction_time
+	if lead.length() > max_pursuit_prediction_distance:
+		lead = lead.normalized() * max_pursuit_prediction_distance
+
+	return target_position + lead
 
 
 func _get_debug_state_text() -> String:
@@ -714,6 +767,9 @@ func _clear_target_awareness() -> void:
 	_stimulus_confidence = 0.0
 	_suspicious_timer = 0.0
 	_last_stimulus_type = &"none"
+	_has_visual_target_sample = false
+	_estimated_target_velocity = Vector2.ZERO
+	_combat_peripheral_tracking_timer = 0.0
 	_hide_last_seen_marker_if_no_active_sightings()
 
 
