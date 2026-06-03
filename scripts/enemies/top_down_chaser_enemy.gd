@@ -31,6 +31,7 @@ enum AwarenessState {
 @export var attack_recovery_time: float = 0.55
 @export var attack_lunge_speed: float = 180.0
 @export var search_memory_time: float = 2.0
+@export var post_combat_search_memory_time: float = 5.5
 @export_flags_2d_physics var line_of_sight_blocker_mask: int = 1
 @export var use_navigation: bool = true
 @export var debug_state_visible: bool = true
@@ -41,6 +42,7 @@ enum AwarenessState {
 @export var shared_alert_range: float = 360.0
 @export var alert_share_delay: float = 0.45
 @export var investigation_time: float = 1.2
+@export var post_combat_investigation_time: float = 2.8
 @export var suspicious_pause_time: float = 0.35
 @export var shared_sighting_confidence: float = 0.75
 @export var hearing_confidence: float = 0.45
@@ -106,6 +108,7 @@ var _clearing_scan_directions: Array[Vector2] = []
 var _clearing_scan_index: int = 0
 var _clearing_scan_step_timer: float = 0.0
 var _corner_clearing_phase: float = 0.0
+var _is_post_combat_search: bool = false
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -365,7 +368,7 @@ func _update_target_awareness(delta: float) -> void:
 		var tracked_position := _target.global_position
 		_update_visual_target_motion(tracked_position, delta)
 		_last_seen_target_position = _get_predicted_pursuit_position(tracked_position)
-		_awareness_timer = search_memory_time
+		_awareness_timer = maxf(_awareness_timer, post_combat_search_memory_time)
 		_is_investigating_last_seen = false
 		_hide_last_seen_marker()
 		return
@@ -374,6 +377,8 @@ func _update_target_awareness(delta: float) -> void:
 		_awareness_state = AwarenessState.SEARCH
 		_detection_progress = 0.0
 		_combat_peripheral_tracking_timer = 0.0
+		_is_post_combat_search = true
+		_awareness_timer = maxf(_awareness_timer, post_combat_search_memory_time)
 
 	_show_last_seen_marker_if_all_targets_lost(_last_seen_target_position)
 	if _awareness_state == AwarenessState.SUSPICIOUS:
@@ -390,7 +395,7 @@ func _update_target_awareness(delta: float) -> void:
 		_awareness_state = AwarenessState.SEARCH
 		if not _is_investigating_last_seen:
 			_is_investigating_last_seen = true
-			_investigation_timer = investigation_time
+			_investigation_timer = _get_current_investigation_time()
 			_start_clearing_scan()
 		_update_clearing_scan(delta)
 		_investigation_timer -= delta
@@ -514,6 +519,13 @@ func _update_clearing_scan(delta: float) -> void:
 		_clearing_scan_step_timer = clearing_scan_step_time
 
 	_turn_facing_toward(_clearing_scan_directions[_clearing_scan_index], delta)
+
+
+func _get_current_investigation_time() -> float:
+	if _is_post_combat_search:
+		return post_combat_investigation_time
+
+	return investigation_time
 
 
 func _get_debug_state_text() -> String:
@@ -656,6 +668,7 @@ func _receive_target_stimulus(
 	_last_stimulus_type = stimulus_type
 	if is_direct_sighting:
 		_awareness_state = AwarenessState.COMBAT
+		_is_post_combat_search = false
 		_suspicious_timer = 0.0
 		_detection_progress = 1.0
 		if debug_last_seen_marker_visible:
@@ -732,6 +745,7 @@ func _clear_target_awareness() -> void:
 	_has_visual_target_sample = false
 	_estimated_target_velocity = Vector2.ZERO
 	_combat_peripheral_tracking_timer = 0.0
+	_is_post_combat_search = false
 	_clearing_scan_directions.clear()
 	_clearing_scan_index = 0
 	_clearing_scan_step_timer = 0.0
