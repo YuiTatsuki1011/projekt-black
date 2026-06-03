@@ -20,4 +20,5 @@ field_magazine_load_time_per_round = 0.28
 fire_cooldown = 0.36
 recoil_amount = 0.28
 recoil_recovery_speed = 6.0
+aim_follow_speed = 10.0
 projectile_scene = ExtResource("2_projectile")

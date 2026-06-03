@@ -51,6 +51,8 @@ func add_item_with_size(item_id: StringName, quantity: int, size_override: Vecto
 			var entry: Dictionary = _entries[entry_id]
 			if entry.get("item_id") != item_id:
 				continue
+			if not _are_metadata_stack_compatible(entry.get("metadata", {}), {}):
+				continue
 
 			var entry_quantity: int = int(entry.get("quantity", 0))
 			var available_space: int = max_stack - entry_quantity
@@ -134,7 +136,8 @@ func add_item_with_metadata_quantity(
 ) -> int:
 	if quantity <= 0:
 		return 0
-	if metadata.is_empty():
+	var normalized_metadata := _normalize_metadata(metadata)
+	if normalized_metadata.is_empty():
 		return add_item_with_size(item_id, quantity, size_override)
 
 	var remaining_quantity := quantity
@@ -152,7 +155,7 @@ func add_item_with_metadata_quantity(
 			break
 
 		var stack_quantity: int = mini(max_stack, remaining_quantity) if is_stackable else 1
-		_create_entry(item_id, position, item_size, stack_quantity, metadata)
+		_create_entry(item_id, position, item_size, stack_quantity, normalized_metadata)
 		remaining_quantity -= stack_quantity
 		added_quantity += stack_quantity
 
@@ -185,6 +188,8 @@ func can_add_item_with_size(item_id: StringName, quantity: int = 1, size_overrid
 		occupied_rects.append(Rect2i(entry.get("position", Vector2i.ZERO), entry.get("size", Vector2i.ONE)))
 
 		if not is_stackable or entry.get("item_id") != item_id:
+			continue
+		if not _are_metadata_stack_compatible(entry.get("metadata", {}), {}):
 			continue
 
 		var entry_quantity: int = int(entry.get("quantity", 0))
@@ -499,7 +504,10 @@ func set_entry_identified(entry_id: int, is_identified: bool = true) -> bool:
 		return false
 
 	var metadata := get_entry_metadata(entry_id)
-	metadata["identified"] = is_identified
+	if is_identified:
+		metadata.erase("identified")
+	else:
+		metadata["identified"] = false
 	return set_entry_metadata(entry_id, metadata)
 
 
@@ -507,12 +515,18 @@ func set_all_entries_identified(is_identified: bool = true) -> void:
 	var changed := false
 	for entry_id in _entries:
 		var entry: Dictionary = _entries[entry_id]
-		var metadata: Dictionary = entry.get("metadata", {})
+		var metadata: Dictionary = Dictionary(entry.get("metadata", {})).duplicate(true)
 		if bool(metadata.get("identified", true)) == is_identified:
 			continue
 
-		metadata["identified"] = is_identified
-		entry["metadata"] = metadata
+		if is_identified:
+			metadata.erase("identified")
+		else:
+			metadata["identified"] = false
+		if metadata.is_empty():
+			entry.erase("metadata")
+		else:
+			entry["metadata"] = metadata
 		_entries[entry_id] = entry
 		changed = true
 
@@ -536,10 +550,11 @@ func set_entry_metadata(entry_id: int, metadata: Dictionary) -> bool:
 		return false
 
 	var entry: Dictionary = _entries[entry_id]
-	if metadata.is_empty():
+	var normalized_metadata := _normalize_metadata(metadata)
+	if normalized_metadata.is_empty():
 		entry.erase("metadata")
 	else:
-		entry["metadata"] = metadata.duplicate(true)
+		entry["metadata"] = normalized_metadata
 	_entries[entry_id] = entry
 	grid_changed.emit()
 	return true
@@ -785,8 +800,9 @@ func _create_entry(
 		"size": size,
 		"quantity": quantity,
 	}
-	if not metadata.is_empty():
-		_entries[entry_id]["metadata"] = metadata.duplicate(true)
+	var normalized_metadata := _normalize_metadata(metadata)
+	if not normalized_metadata.is_empty():
+		_entries[entry_id]["metadata"] = normalized_metadata
 	return entry_id
 
 
@@ -871,4 +887,11 @@ func _is_area_free_in_rects(position: Vector2i, size: Vector2i, occupied_rects: 
 
 
 func _are_metadata_stack_compatible(left: Dictionary, right: Dictionary) -> bool:
-	return left == right
+	return _normalize_metadata(left) == _normalize_metadata(right)
+
+
+func _normalize_metadata(metadata: Dictionary) -> Dictionary:
+	var normalized := metadata.duplicate(true)
+	if bool(normalized.get("identified", true)):
+		normalized.erase("identified")
+	return normalized

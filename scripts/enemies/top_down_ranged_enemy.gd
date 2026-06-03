@@ -3,6 +3,7 @@ class_name TopDownRangedEnemy
 
 enum ShootState {
 	IDLE,
+	TRACKING,
 	WINDUP,
 	RECOVERY,
 }
@@ -14,6 +15,7 @@ enum ShootState {
 @export var preferred_range: float = 300.0
 @export var retreat_range: float = 150.0
 @export var move_speed: float = 82.0
+@export var aim_tracking_time: float = 0.45
 @export var shot_windup_time: float = 0.5
 @export var shot_recovery_time: float = 1.1
 @export var initial_shot_delay: float = 0.35
@@ -126,24 +128,41 @@ func _update_shoot_state(delta: float) -> void:
 
 	match _shoot_state:
 		ShootState.IDLE:
-			_update_unlocked_aim()
 			if _can_shoot_target():
-				_enter_windup()
-		ShootState.WINDUP:
+				_enter_tracking()
+			else:
+				_set_telegraph_visible(false)
+		ShootState.TRACKING:
 			if not _can_shoot_target():
-				_enter_recovery(0.25)
+				_enter_search()
 				return
 
+			_update_unlocked_aim()
 			_shot_timer -= delta
-			_update_telegraph_visual()
+			_update_telegraph_visual(false)
+			if _shot_timer <= 0.0:
+				_enter_windup()
+		ShootState.WINDUP:
+			_shot_timer -= delta
+			_update_telegraph_visual(true)
 			if _shot_timer <= 0.0:
 				_fire_locked_shot()
 				_enter_recovery(shot_recovery_time)
 		ShootState.RECOVERY:
-			_update_unlocked_aim()
+			_set_telegraph_visible(false)
 			_shot_timer -= delta
 			if _shot_timer <= 0.0:
 				_shoot_state = ShootState.IDLE
+
+
+func _enter_tracking() -> void:
+	_shoot_state = ShootState.TRACKING
+	_shot_timer = aim_tracking_time
+	body_visual.color = Color(0.22, 0.18, 0.15, 1.0)
+	eye_visual.color = Color(1.0, 0.25, 0.08, 1.0)
+	_set_telegraph_visible(true)
+	_update_unlocked_aim()
+	_update_telegraph_visual(false)
 
 
 func _enter_windup() -> void:
@@ -157,12 +176,20 @@ func _enter_windup() -> void:
 	body_visual.color = Color(0.24, 0.2, 0.16, 1.0)
 	eye_visual.color = Color(1.0, 0.18, 0.08, 1.0)
 	_set_telegraph_visible(true)
-	_update_telegraph_visual()
+	_update_telegraph_visual(true)
 
 
 func _enter_recovery(duration: float) -> void:
 	_shoot_state = ShootState.RECOVERY
 	_shot_timer = duration
+	_set_telegraph_visible(false)
+	body_visual.color = _base_body_color
+	eye_visual.color = _base_eye_color
+
+
+func _enter_search() -> void:
+	_shoot_state = ShootState.IDLE
+	_shot_timer = 0.0
 	_set_telegraph_visible(false)
 	body_visual.color = _base_body_color
 	eye_visual.color = _base_eye_color
@@ -289,7 +316,7 @@ func _set_telegraph_visible(is_visible: bool) -> void:
 	telegraph_line.visible = is_visible
 
 
-func _update_telegraph_visual() -> void:
+func _update_telegraph_visual(is_locked_warning: bool = false) -> void:
 	if telegraph_line == null:
 		return
 
@@ -297,8 +324,11 @@ func _update_telegraph_visual() -> void:
 	var end_position := to_local(_get_telegraph_end_position())
 	telegraph_line.points = PackedVector2Array([start_position, end_position])
 
-	var pulse := 0.18 + sin(Time.get_ticks_msec() * 0.026) * 0.08
-	telegraph_line.default_color = Color(1.0, 0.08 + pulse, 0.04, 0.44 + pulse)
+	if is_locked_warning:
+		var pulse := 0.34 + sin(Time.get_ticks_msec() * 0.042) * 0.24
+		telegraph_line.default_color = Color(1.0, 0.08 + pulse, 0.04, 0.55 + pulse)
+	else:
+		telegraph_line.default_color = Color(1.0, 0.14, 0.08, 0.38)
 
 
 func _get_telegraph_end_position() -> Vector2:

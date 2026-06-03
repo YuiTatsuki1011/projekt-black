@@ -49,6 +49,12 @@ enum MovementMode {
 @export var fire_cooldown: float = 0.22
 @export var recoil_amount: float = 0.18
 @export var recoil_recovery_speed: float = 8.0
+@export var recoil_max_amount: float = 0.65
+@export var aim_follow_speed: float = 16.0
+@export var aim_indicator_base_radius: float = 5.0
+@export var aim_indicator_recoil_radius: float = 34.0
+@export var shot_spread_angle_per_recoil: float = 0.12
+@export_flags_2d_physics var aim_blocker_mask: int = 1
 @export var aim_flip_dead_zone: float = 12.0
 @export var damage_flash_time: float = 0.12
 @export var damage_knockback_strength: float = 130.0
@@ -150,6 +156,9 @@ var _firearm_chamber_rounds_by_slot: Dictionary = {}
 var _firearm_has_magazine_by_slot: Dictionary = {}
 var _firearm_magazine_item_id_by_slot: Dictionary = {}
 var _firearm_slot_input_was_pressed: Array[bool] = [false, false, false, false]
+var _desired_aim_position: Vector2 = Vector2.ZERO
+var _actual_aim_position: Vector2 = Vector2.ZERO
+var _aim_initialized: bool = false
 var _is_sub_weapon_aiming: bool = false
 var _sub_weapon_fire_was_pressed: bool = false
 var _melee_combo_damages: PackedInt32Array = PackedInt32Array([34, 48, 68])
@@ -255,6 +264,7 @@ func _apply_ranged_weapon_stats(ranged_weapon: Resource) -> void:
 	fire_cooldown = float(_get_resource_value(ranged_weapon, &"fire_cooldown", fire_cooldown))
 	recoil_amount = float(_get_resource_value(ranged_weapon, &"recoil_amount", recoil_amount))
 	recoil_recovery_speed = float(_get_resource_value(ranged_weapon, &"recoil_recovery_speed", recoil_recovery_speed))
+	aim_follow_speed = float(_get_resource_value(ranged_weapon, &"aim_follow_speed", aim_follow_speed))
 	var next_projectile_scene: PackedScene = _get_resource_value(ranged_weapon, &"projectile_scene", projectile_scene) as PackedScene
 	if next_projectile_scene != null:
 		projectile_scene = next_projectile_scene
@@ -287,6 +297,7 @@ func _clear_ranged_weapon_stats() -> void:
 	fire_cooldown = 0.0
 	recoil_amount = 0.0
 	_recoil = 0.0
+	_aim_initialized = false
 	forearm_bone.rotation = 0.0
 	projectile_scene = null
 
@@ -839,6 +850,15 @@ func get_firearm_hud_info() -> Dictionary:
 	}
 
 
+func get_firearm_aim_info() -> Dictionary:
+	return {
+		"visible": _has_ranged_weapon and not _is_inventory_open and not _is_dead,
+		"target_position": get_global_mouse_position(),
+		"actual_aim_position": _actual_aim_position,
+		"spread_radius": _get_aim_indicator_radius(),
+	}
+
+
 func get_field_magazine_loading_entry_id() -> int:
 	return _field_magazine_load_entry_id if _is_field_magazine_loading else -1
 
@@ -856,6 +876,14 @@ func _update_aim(delta: float) -> void:
 		return
 
 	var mouse_position: Vector2 = get_global_mouse_position()
+	_desired_aim_position = _get_blocked_aim_position(mouse_position)
+	if not _aim_initialized:
+		_actual_aim_position = _desired_aim_position
+		_aim_initialized = true
+	else:
+		var follow_weight := 1.0 - exp(-maxf(aim_follow_speed, 0.01) * delta)
+		_actual_aim_position = _actual_aim_position.lerp(_desired_aim_position, clampf(follow_weight, 0.0, 1.0))
+
 	var next_facing: int = _facing
 	var aim_offset_x: float = mouse_position.x - global_position.x
 	if aim_offset_x > aim_flip_dead_zone:
@@ -868,7 +896,7 @@ func _update_aim(delta: float) -> void:
 		body_root.scale.x = float(_facing)
 		_update_arm_anchor()
 
-	var aim_vector: Vector2 = mouse_position - arm_rig.global_position
+	var aim_vector: Vector2 = _actual_aim_position - arm_rig.global_position
 	if aim_vector.length_squared() <= 0.01:
 		return
 
@@ -877,6 +905,44 @@ func _update_aim(delta: float) -> void:
 
 	_recoil = move_toward(_recoil, 0.0, recoil_recovery_speed * delta)
 	forearm_bone.rotation = -_recoil * arm_rig.scale.y
+
+
+func _get_blocked_aim_position(target_position: Vector2) -> Vector2:
+	if arm_rig == null:
+		return target_position
+	if arm_rig.global_position.distance_squared_to(target_position) <= 0.01:
+		return target_position
+
+	var query := PhysicsRayQueryParameters2D.new()
+	query.from = arm_rig.global_position
+	query.to = target_position
+	query.collision_mask = aim_blocker_mask
+	query.exclude = [get_rid()]
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	var hit := get_world_2d().direct_space_state.intersect_ray(query)
+	if hit.has("position"):
+		return hit.get("position", target_position)
+
+	return target_position
+
+
+func _get_aim_indicator_radius() -> float:
+	return aim_indicator_base_radius + _recoil * aim_indicator_recoil_radius
+
+
+func _get_shot_direction() -> Vector2:
+	var direction := (_actual_aim_position - muzzle.global_position).normalized()
+	if direction.length_squared() <= 0.01:
+		direction = muzzle.global_transform.x.normalized()
+	if direction.length_squared() <= 0.01:
+		direction = Vector2.RIGHT.rotated(arm_rig.global_rotation)
+
+	var spread_angle := _recoil * shot_spread_angle_per_recoil
+	if spread_angle > 0.001:
+		direction = direction.rotated(randf_range(-spread_angle, spread_angle)).normalized()
+
+	return direction
 
 
 func _try_fire() -> void:
@@ -909,9 +975,7 @@ func _try_fire() -> void:
 
 	if projectile is Node2D:
 		var projectile_2d := projectile as Node2D
-		var shot_direction: Vector2 = muzzle.global_transform.x.normalized()
-		if shot_direction == Vector2.ZERO:
-			shot_direction = Vector2.RIGHT.rotated(arm_rig.global_rotation)
+		var shot_direction := _get_shot_direction()
 
 		projectile_2d.global_position = muzzle.global_position
 		projectile_2d.global_rotation = shot_direction.angle()
@@ -1387,7 +1451,7 @@ func _consume_round() -> void:
 	_update_current_ammo_from_loaded_parts()
 	_save_active_firearm_ammo()
 	_fire_cooldown_remaining = fire_cooldown
-	_recoil = recoil_amount
+	_recoil = minf(_recoil + recoil_amount, recoil_max_amount)
 	fired.emit(current_ammo)
 	ammo_changed.emit(current_ammo, reserve_ammo)
 	_emit_magazine_status_changed()
@@ -1903,6 +1967,10 @@ func _create_interaction_highlight(interactable: Node2D) -> Line2D:
 
 
 func _get_interactable_outline_points(interactable: Node2D) -> PackedVector2Array:
+	var visual_points := _get_interactable_visual_outline_points(interactable)
+	if not visual_points.is_empty():
+		return visual_points
+
 	for child in interactable.get_children():
 		var collision_shape := child as CollisionShape2D
 		if collision_shape == null or collision_shape.shape == null:
@@ -1926,6 +1994,68 @@ func _get_interactable_outline_points(interactable: Node2D) -> PackedVector2Arra
 			return points
 
 	return PackedVector2Array()
+
+
+func _get_interactable_visual_outline_points(interactable: Node2D) -> PackedVector2Array:
+	var points: Array[Vector2] = []
+	_collect_interactable_polygon_points(interactable, interactable, points)
+	if points.size() < 3:
+		return PackedVector2Array()
+
+	return PackedVector2Array(_get_convex_hull(points))
+
+
+func _collect_interactable_polygon_points(root_node: Node2D, current: Node, points: Array[Vector2]) -> void:
+	for child in current.get_children():
+		if child.name == INTERACTION_HIGHLIGHT_NAME:
+			continue
+
+		var polygon_node := child as Polygon2D
+		if polygon_node != null and polygon_node.visible:
+			for point in polygon_node.polygon:
+				var global_point: Vector2 = polygon_node.global_transform * point
+				points.append(root_node.global_transform.affine_inverse() * global_point)
+
+		if child is Node2D:
+			_collect_interactable_polygon_points(root_node, child, points)
+
+
+func _get_convex_hull(points: Array[Vector2]) -> Array[Vector2]:
+	var sorted_points := points.duplicate()
+	sorted_points.sort_custom(func(a: Vector2, b: Vector2) -> bool:
+		if is_equal_approx(a.x, b.x):
+			return a.y < b.y
+		return a.x < b.x
+	)
+
+	var unique_points: Array[Vector2] = []
+	for point in sorted_points:
+		if unique_points.is_empty() or point.distance_squared_to(unique_points.back()) > 0.01:
+			unique_points.append(point)
+	if unique_points.size() < 3:
+		return unique_points
+
+	var lower: Array[Vector2] = []
+	for point in unique_points:
+		while lower.size() >= 2 and _cross(lower[lower.size() - 2], lower[lower.size() - 1], point) <= 0.0:
+			lower.pop_back()
+		lower.append(point)
+
+	var upper: Array[Vector2] = []
+	for index in range(unique_points.size() - 1, -1, -1):
+		var point := unique_points[index]
+		while upper.size() >= 2 and _cross(upper[upper.size() - 2], upper[upper.size() - 1], point) <= 0.0:
+			upper.pop_back()
+		upper.append(point)
+
+	lower.pop_back()
+	upper.pop_back()
+	lower.append_array(upper)
+	return lower
+
+
+func _cross(origin: Vector2, a: Vector2, b: Vector2) -> float:
+	return (a - origin).cross(b - origin)
 
 
 func _on_died() -> void:

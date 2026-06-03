@@ -1096,7 +1096,9 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 	if event is InputEventMouseButton:
 		var mouse_button := event as InputEventMouseButton
 		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
-			if not mouse_button.ctrl_pressed or not _begin_split_drag(
+			if mouse_button.shift_pressed:
+				_quick_transfer_entry_between_inventories(_inventory, _external_inventory, entry_id)
+			elif not mouse_button.ctrl_pressed or not _begin_split_drag(
 				_inventory,
 				entry_id,
 				_item_nodes.get(entry_id) as Control,
@@ -1109,8 +1111,6 @@ func _on_item_gui_input(event: InputEvent, entry_id: int) -> void:
 				_cancel_magazine_load_job()
 			elif mouse_button.ctrl_pressed:
 				_try_split_stack_entry(_inventory, entry_id)
-			elif mouse_button.shift_pressed:
-				_quick_transfer_entry_between_inventories(_inventory, _external_inventory, entry_id)
 			else:
 				_show_item_context_menu(_inventory, entry_id, DRAG_SOURCE_INVENTORY)
 			get_viewport().set_input_as_handled()
@@ -1123,7 +1123,9 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 	if event is InputEventMouseButton:
 		var mouse_button := event as InputEventMouseButton
 		if mouse_button.button_index == MOUSE_BUTTON_LEFT and mouse_button.pressed:
-			if not mouse_button.ctrl_pressed or not _begin_split_drag(
+			if mouse_button.shift_pressed:
+				_quick_transfer_entry_between_inventories(_external_inventory, _inventory, entry_id)
+			elif not mouse_button.ctrl_pressed or not _begin_split_drag(
 				_external_inventory,
 				entry_id,
 				_external_item_nodes.get(entry_id) as Control,
@@ -1136,8 +1138,6 @@ func _on_external_item_gui_input(event: InputEvent, entry_id: int) -> void:
 				_cancel_magazine_load_job()
 			elif mouse_button.ctrl_pressed:
 				_try_split_stack_entry(_external_inventory, entry_id)
-			elif mouse_button.shift_pressed:
-				_quick_transfer_entry_between_inventories(_external_inventory, _inventory, entry_id)
 			else:
 				_show_item_context_menu(_external_inventory, entry_id, DRAG_SOURCE_EXTERNAL)
 			get_viewport().set_input_as_handled()

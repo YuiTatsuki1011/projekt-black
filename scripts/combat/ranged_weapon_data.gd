@@ -16,4 +16,5 @@ class_name RangedWeaponData
 @export var fire_cooldown: float = 0.22
 @export var recoil_amount: float = 0.18
 @export var recoil_recovery_speed: float = 8.0
+@export var aim_follow_speed: float = 16.0
 @export var projectile_scene: PackedScene
