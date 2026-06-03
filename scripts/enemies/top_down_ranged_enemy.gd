@@ -767,7 +767,7 @@ func _find_cover_hide_position(peek_position: Vector2, threat_position: Vector2)
 	return peek_position
 
 
-func _enter_lost_target_search() -> void:
+func _enter_lost_target_search(share_to_squad: bool = true) -> void:
 	_awareness_state = AwarenessState.SEARCH
 	_detection_progress = 0.0
 	_combat_peripheral_tracking_timer = 0.0
@@ -776,10 +776,18 @@ func _enter_lost_target_search() -> void:
 	_has_search_probe_plan = false
 	_search_probe_points.clear()
 	_search_probe_index = 0
+	if share_to_squad:
+		_share_lost_target_search(_last_seen_target_position)
 	_choose_lost_target_decision()
 	_choose_lost_target_squad_role()
+	if share_to_squad:
+		_refresh_shared_lost_target_roles()
 	_clear_cover_target()
 
+	_refresh_lost_target_search_memory()
+
+
+func _refresh_lost_target_search_memory() -> void:
 	var memory_time := post_combat_search_memory_time
 	match _lost_target_decision:
 		LostTargetDecision.AGGRESSIVE_SEARCH:
@@ -875,9 +883,12 @@ func _get_lost_target_squad_movement_position(base_position: Vector2) -> Vector2
 	match _lost_target_squad_role:
 		LostTargetSquadRole.OVERWATCH:
 			var watch_distance := global_position.distance_to(base_position)
-			if watch_distance <= lost_target_overwatch_hold_distance and _has_line_of_sight_to_position(base_position):
+			if _has_line_of_sight_to_position(base_position) and watch_distance <= lost_target_overwatch_hold_distance:
 				return global_position
-			preferred_position = base_position - approach_direction * minf(lost_target_overwatch_hold_distance, preferred_range)
+			if _has_line_of_sight_to_position(base_position):
+				preferred_position = base_position - approach_direction * lost_target_overwatch_hold_distance
+			else:
+				preferred_position = base_position
 		LostTargetSquadRole.SWEEP_LEFT:
 			preferred_position = base_position + side_direction * lost_target_sweep_offset_distance + approach_direction * lost_target_sweep_forward_distance
 		LostTargetSquadRole.SWEEP_RIGHT:
@@ -2127,6 +2138,51 @@ func receive_shared_player_sighting(sighting_position: Vector2, source: Node) ->
 	_receive_target_stimulus(sighting_position, shared_sighting_confidence, &"shared", false)
 
 
+func receive_shared_lost_target_search(sighting_position: Vector2, source: Node) -> void:
+	if _is_dead or source == self:
+		return
+	if _can_see_target():
+		return
+
+	_has_last_seen_target = true
+	_last_seen_target_position = sighting_position
+	_awareness_state = AwarenessState.SEARCH
+	_detection_progress = 0.0
+	_direct_sighting_share_timer = 0.0
+	_has_shared_current_sighting = false
+	_is_investigating_last_seen = false
+	_investigation_timer = 0.0
+	_combat_peripheral_tracking_timer = 0.0
+	_is_post_combat_search = true
+	_is_search_probe_target = false
+	_has_search_probe_plan = false
+	_search_probe_points.clear()
+	_search_probe_index = 0
+	_stimulus_confidence = maxf(_stimulus_confidence, shared_sighting_confidence)
+	_last_stimulus_type = &"shared_search"
+	_choose_lost_target_decision()
+	_choose_lost_target_squad_role()
+	_clear_cover_target()
+	_refresh_lost_target_search_memory()
+
+
+func refresh_lost_target_squad_role() -> void:
+	if _is_dead or not _has_last_seen_target:
+		return
+	if _awareness_state == AwarenessState.COMBAT and _can_see_target():
+		return
+	if (
+		_awareness_state != AwarenessState.SEARCH
+		and _awareness_state != AwarenessState.INVESTIGATE
+		and _awareness_state != AwarenessState.COMBAT
+	):
+		return
+
+	_choose_lost_target_decision()
+	_choose_lost_target_squad_role()
+	_refresh_lost_target_search_memory()
+
+
 func receive_noise_event(noise_position: Vector2, radius: float, source: Node, _noise_type: StringName = &"generic") -> void:
 	if _is_dead or source == self:
 		return
@@ -2307,6 +2363,38 @@ func _share_player_sighting(sighting_position: Vector2) -> void:
 			continue
 		if enemy.has_method("receive_shared_player_sighting"):
 			enemy.call("receive_shared_player_sighting", sighting_position, self)
+
+
+func _share_lost_target_search(sighting_position: Vector2) -> void:
+	if debug_last_seen_marker_visible:
+		_show_last_seen_marker_if_all_targets_lost(sighting_position)
+
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy == self or not is_instance_valid(enemy):
+			continue
+		if not enemy is Node2D:
+			continue
+
+		var enemy_2d := enemy as Node2D
+		if global_position.distance_squared_to(enemy_2d.global_position) > shared_alert_range * shared_alert_range:
+			continue
+		if enemy.has_method("receive_shared_lost_target_search"):
+			enemy.call("receive_shared_lost_target_search", sighting_position, self)
+
+
+func _refresh_shared_lost_target_roles() -> void:
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if not is_instance_valid(enemy):
+			continue
+		if not enemy.has_method("refresh_lost_target_squad_role"):
+			continue
+		if not enemy is Node2D:
+			continue
+
+		var enemy_2d := enemy as Node2D
+		if global_position.distance_squared_to(enemy_2d.global_position) > shared_alert_range * shared_alert_range:
+			continue
+		enemy.call("refresh_lost_target_squad_role")
 
 
 func _clear_target_awareness() -> void:
