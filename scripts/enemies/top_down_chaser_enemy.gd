@@ -46,6 +46,7 @@ enum AwarenessState {
 @export var hearing_confidence: float = 0.45
 @export var gunshot_hearing_confidence: float = 0.7
 @export var hit_confidence: float = 0.9
+@export var visual_tracking_turn_speed_degrees: float = 540.0
 @export var debug_vision_visible: bool = true
 @export var debug_vision_focus_distance: float = 380.0
 @export var debug_vision_segments: int = 24
@@ -122,6 +123,7 @@ func _physics_process(delta: float) -> void:
 		_resolve_target()
 
 	_update_target_awareness(delta)
+	_update_visual_tracking(delta)
 	_update_attack_state(delta)
 	_update_velocity()
 	_update_debug_label()
@@ -369,6 +371,41 @@ func _update_target_awareness(delta: float) -> void:
 		_clear_target_awareness()
 
 
+func _update_visual_tracking(delta: float) -> void:
+	if _target == null or not is_instance_valid(_target):
+		return
+	if _attack_state == AttackState.WINDUP or _attack_state == AttackState.ACTIVE:
+		return
+	if _detection_progress <= 0.01 and not _has_last_seen_target:
+		return
+	if global_position.distance_squared_to(_target.global_position) > aggro_range * aggro_range:
+		return
+	if not _has_line_of_sight_to_target():
+		return
+
+	var to_target := _target.global_position - _get_vision_origin()
+	if to_target.length_squared() <= 0.01:
+		return
+
+	_turn_facing_toward(to_target.normalized(), delta)
+
+
+func _turn_facing_toward(direction: Vector2, delta: float) -> void:
+	if direction.length_squared() <= 0.01:
+		return
+
+	var current_direction := _facing_direction.normalized()
+	if current_direction.length_squared() <= 0.01:
+		current_direction = direction.normalized()
+	var desired_direction := direction.normalized()
+	var angle_delta := current_direction.angle_to(desired_direction)
+	var max_turn := deg_to_rad(visual_tracking_turn_speed_degrees) * delta
+	if absf(angle_delta) <= max_turn:
+		_set_facing(desired_direction)
+	else:
+		_set_facing(current_direction.rotated(signf(angle_delta) * max_turn))
+
+
 func _get_debug_state_text() -> String:
 	if _attack_state == AttackState.WINDUP or _attack_state == AttackState.ACTIVE:
 		return "ATTACK"
@@ -516,12 +553,24 @@ func _receive_target_stimulus(
 		return
 
 	if stimulus_type == &"noise":
-		_awareness_state = AwarenessState.SUSPICIOUS
-		_suspicious_timer = suspicious_pause_time
+		if _awareness_state == AwarenessState.COMBAT and _can_see_target():
+			_suspicious_timer = 0.0
+		elif _awareness_state == AwarenessState.SUSPICIOUS:
+			var pause_limit := suspicious_pause_time
+			if confidence >= gunshot_hearing_confidence:
+				pause_limit *= 0.25
+			_suspicious_timer = minf(_suspicious_timer, pause_limit)
+		elif _awareness_state == AwarenessState.INVESTIGATE or _awareness_state == AwarenessState.SEARCH:
+			_suspicious_timer = 0.0
+		elif confidence >= gunshot_hearing_confidence:
+			_awareness_state = AwarenessState.INVESTIGATE
+			_suspicious_timer = 0.0
+		else:
+			_awareness_state = AwarenessState.SUSPICIOUS
+			_suspicious_timer = suspicious_pause_time
 	else:
 		_awareness_state = AwarenessState.INVESTIGATE
 		_suspicious_timer = 0.0
-	_detection_progress = 0.0
 
 
 func _react_to_attack_source(hit_direction: Vector2) -> void:
