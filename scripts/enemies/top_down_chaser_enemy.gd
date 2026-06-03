@@ -112,6 +112,12 @@ enum GroupTacticRole {
 @export var separation_push_speed: float = 420.0
 @export var enemy_separation_radius: float = 42.0
 @export var enemy_separation_strength: float = 160.0
+@export var enemy_local_avoidance_enabled: bool = true
+@export var enemy_avoidance_lookahead: float = 78.0
+@export var enemy_avoidance_width: float = 34.0
+@export var enemy_avoidance_strength: float = 185.0
+@export_range(0.0, 1.0, 0.05) var enemy_avoidance_slowdown: float = 0.65
+@export var enemy_avoidance_side_hold_time: float = 0.36
 @export var hearing_sensitivity: float = 1.0
 @export var hit_vfx_scene: PackedScene
 @export var death_vfx_scene: PackedScene
@@ -165,6 +171,10 @@ var _has_search_probe_plan: bool = false
 var _is_search_probe_target: bool = false
 var _current_group_role: int = GroupTacticRole.NONE
 var _is_fallback_active: bool = false
+var _enemy_avoidance_side: float = 0.0
+var _enemy_avoidance_side_timer: float = 0.0
+var _is_avoiding_enemy: bool = false
+var _is_blocked_by_enemy: bool = false
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -201,6 +211,7 @@ func _physics_process(delta: float) -> void:
 	_update_attack_state(delta)
 	_update_velocity(delta)
 	_apply_enemy_separation_velocity()
+	_apply_enemy_local_avoidance_velocity(delta)
 	_update_debug_label()
 	_update_debug_vision()
 	_update_detection_bar()
@@ -743,6 +754,124 @@ func _apply_enemy_separation_velocity() -> void:
 	velocity += separation * enemy_separation_strength
 
 
+func _apply_enemy_local_avoidance_velocity(delta: float) -> void:
+	_is_avoiding_enemy = false
+	_is_blocked_by_enemy = false
+	_enemy_avoidance_side_timer = maxf(_enemy_avoidance_side_timer - delta, 0.0)
+	if not enemy_local_avoidance_enabled:
+		return
+	if not _has_last_seen_target:
+		return
+	if _attack_state == AttackState.ACTIVE:
+		return
+	if velocity.length_squared() <= 16.0:
+		return
+
+	var move_direction := velocity.normalized()
+	var blocker := _get_enemy_path_blocker(move_direction)
+	if blocker.is_empty():
+		if _enemy_avoidance_side_timer <= 0.0:
+			_enemy_avoidance_side = 0.0
+		return
+
+	var side_direction := Vector2(-move_direction.y, move_direction.x)
+	var lateral := float(blocker.get("lateral", 0.0))
+	var forward := float(blocker.get("forward", enemy_avoidance_lookahead))
+	var corridor_width := maxf(enemy_avoidance_width, enemy_separation_radius * 0.75)
+	var side_sign := _choose_enemy_avoidance_side(move_direction, side_direction, lateral)
+	var forward_weight := 1.0 - clampf(forward / maxf(enemy_avoidance_lookahead, 1.0), 0.0, 1.0)
+	var center_weight := 1.0 - clampf(absf(lateral) / maxf(corridor_width, 1.0), 0.0, 1.0)
+	var avoid_weight := clampf(maxf(forward_weight, center_weight), 0.25, 1.0)
+
+	velocity += side_direction * side_sign * enemy_avoidance_strength * avoid_weight
+	if center_weight > 0.45 and forward < enemy_avoidance_lookahead * 0.72:
+		var forward_speed := velocity.dot(move_direction)
+		if forward_speed > 0.0:
+			velocity -= move_direction * forward_speed * enemy_avoidance_slowdown * center_weight
+		_is_blocked_by_enemy = true
+
+	_is_avoiding_enemy = true
+
+
+func _get_enemy_path_blocker(move_direction: Vector2) -> Dictionary:
+	var best_blocker := {}
+	var best_score := -INF
+	var side_direction := Vector2(-move_direction.y, move_direction.x)
+	var corridor_width := maxf(enemy_avoidance_width, enemy_separation_radius * 0.75)
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy == self or enemy == null or not is_instance_valid(enemy):
+			continue
+		if not enemy is Node2D:
+			continue
+
+		var enemy_2d := enemy as Node2D
+		var to_enemy := enemy_2d.global_position - global_position
+		var forward := to_enemy.dot(move_direction)
+		if forward <= 0.0 or forward > enemy_avoidance_lookahead:
+			continue
+
+		var lateral := to_enemy.dot(side_direction)
+		if absf(lateral) > corridor_width:
+			continue
+
+		var forward_score := 1.0 - clampf(forward / maxf(enemy_avoidance_lookahead, 1.0), 0.0, 1.0)
+		var center_score := 1.0 - clampf(absf(lateral) / maxf(corridor_width, 1.0), 0.0, 1.0)
+		var score := forward_score * 1.15 + center_score
+		if score > best_score:
+			best_score = score
+			best_blocker = {
+				"enemy": enemy,
+				"forward": forward,
+				"lateral": lateral,
+			}
+
+	return best_blocker
+
+
+func _choose_enemy_avoidance_side(move_direction: Vector2, side_direction: Vector2, blocker_lateral: float) -> float:
+	if _enemy_avoidance_side_timer > 0.0 and _enemy_avoidance_side != 0.0:
+		return _enemy_avoidance_side
+
+	var chosen_side := 0.0
+	if absf(blocker_lateral) > 4.0:
+		chosen_side = -signf(blocker_lateral)
+	else:
+		var positive_density := _get_enemy_side_density(move_direction, side_direction, 1.0)
+		var negative_density := _get_enemy_side_density(move_direction, side_direction, -1.0)
+		if is_equal_approx(positive_density, negative_density):
+			chosen_side = 1.0 if get_instance_id() % 2 == 0 else -1.0
+		else:
+			chosen_side = 1.0 if positive_density < negative_density else -1.0
+
+	_enemy_avoidance_side = chosen_side
+	_enemy_avoidance_side_timer = enemy_avoidance_side_hold_time
+	return chosen_side
+
+
+func _get_enemy_side_density(move_direction: Vector2, side_direction: Vector2, side_sign: float) -> float:
+	var density := 0.0
+	var scan_width := maxf(enemy_avoidance_width * 2.0, enemy_separation_radius)
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy == self or enemy == null or not is_instance_valid(enemy):
+			continue
+		if not enemy is Node2D:
+			continue
+
+		var enemy_2d := enemy as Node2D
+		var to_enemy := enemy_2d.global_position - global_position
+		var forward := to_enemy.dot(move_direction)
+		if forward < -enemy_separation_radius or forward > enemy_avoidance_lookahead:
+			continue
+
+		var signed_lateral := to_enemy.dot(side_direction) * side_sign
+		if signed_lateral <= 0.0 or signed_lateral > scan_width:
+			continue
+
+		density += 1.0 / maxf(12.0, signed_lateral + maxf(forward, 0.0) * 0.35)
+
+	return density
+
+
 func _update_attack_state(delta: float) -> void:
 	match _attack_state:
 		AttackState.CHASE:
@@ -1030,6 +1159,10 @@ func _get_debug_state_text() -> String:
 		state_text = "ATTACK"
 	elif _attack_state == AttackState.RECOVERY:
 		state_text = "RECOVER"
+	elif _is_blocked_by_enemy:
+		state_text = "BLOCKED"
+	elif _is_avoiding_enemy:
+		state_text = "AVOID"
 	elif _is_target_visible():
 		state_text = "CHASE"
 	elif _can_see_target() and _awareness_state != AwarenessState.COMBAT:
