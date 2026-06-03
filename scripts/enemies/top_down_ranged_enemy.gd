@@ -108,6 +108,14 @@ enum GroupTacticRole {
 @export var group_tactic_range: float = 320.0
 @export var flank_offset_distance: float = 96.0
 @export var rear_pressure_offset_distance: float = 128.0
+@export var cover_usage_enabled: bool = true
+@export var cover_search_radius: float = 190.0
+@export var cover_probe_count: int = 18
+@export var cover_repath_interval: float = 0.7
+@export var cover_arrival_distance: float = 18.0
+@export var cover_shape_radius: float = 16.0
+@export var cover_min_threat_distance: float = 130.0
+@export var cover_adjacency_distance: float = 64.0
 @export var debug_vision_visible: bool = true
 @export var debug_vision_focus_distance: float = 440.0
 @export var debug_vision_segments: int = 24
@@ -167,6 +175,9 @@ var _has_search_probe_plan: bool = false
 var _is_search_probe_target: bool = false
 var _current_group_role: int = GroupTacticRole.NONE
 var _is_fallback_active: bool = false
+var _cover_target_position: Vector2 = Vector2.INF
+var _cover_repath_timer: float = 0.0
+var _is_using_cover: bool = false
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -202,6 +213,7 @@ func _physics_process(delta: float) -> void:
 	_update_target_awareness(delta)
 	_update_visual_tracking(delta)
 	_update_shoot_state(delta)
+	_cover_repath_timer = maxf(_cover_repath_timer - delta, 0.0)
 	_update_velocity(delta)
 	_apply_enemy_separation_velocity()
 	_update_debug_label()
@@ -234,6 +246,7 @@ func _resolve_target() -> void:
 
 func _update_velocity(delta: float) -> void:
 	velocity = _knockback_velocity
+	_is_using_cover = false
 	if not _has_last_seen_target:
 		return
 	if _awareness_state == AwarenessState.SUSPICIOUS:
@@ -247,6 +260,11 @@ func _update_velocity(delta: float) -> void:
 	var visible_target := _is_target_visible()
 	var target_position := _target.global_position if visible_target else _last_seen_target_position
 	var movement_position := _get_group_pursuit_position(target_position)
+	var cover_position := _get_cover_movement_position(target_position, visible_target, movement_position)
+	if cover_position != Vector2.INF:
+		_move_toward_cover(cover_position, target_position)
+		return
+
 	var to_target := movement_position - global_position
 	var target_distance := to_target.length()
 	if target_distance <= 0.01:
@@ -366,6 +384,206 @@ func _get_group_pursuit_position(base_position: Vector2) -> Vector2:
 				return guard_position
 
 	return base_position
+
+
+func _get_cover_movement_position(threat_position: Vector2, visible_target: bool, movement_position: Vector2) -> Vector2:
+	if not _should_seek_cover(threat_position, visible_target):
+		_clear_cover_target()
+		return Vector2.INF
+	if _is_valid_cover_position(_cover_target_position, threat_position):
+		_is_using_cover = true
+		return _cover_target_position
+	if _cover_repath_timer > 0.0:
+		return Vector2.INF
+
+	_cover_repath_timer = cover_repath_interval
+	_cover_target_position = _find_cover_position(threat_position, movement_position)
+	_is_using_cover = _cover_target_position != Vector2.INF
+	return _cover_target_position
+
+
+func _should_seek_cover(threat_position: Vector2, visible_target: bool) -> bool:
+	if not cover_usage_enabled or not visible_target:
+		return false
+	if _shoot_state == ShootState.WINDUP:
+		return false
+	if ai_archetype == EnemyArchetype.LIGHT_MELEE or ai_archetype == EnemyArchetype.BEAST:
+		return false
+	if ai_archetype == EnemyArchetype.HEAVY_ASSAULT and _current_group_role == GroupTacticRole.DIRECT:
+		return false
+	if global_position.distance_squared_to(threat_position) < cover_min_threat_distance * cover_min_threat_distance:
+		return false
+	if _current_group_role == GroupTacticRole.SUPPRESS:
+		return true
+	if ai_personality == EnemyPersonality.CAUTIOUS or ai_personality == EnemyPersonality.COWARDLY:
+		return true
+	if _get_health_ratio() < 0.55 and self_preservation >= 0.5:
+		return true
+
+	return _get_active_group_members().size() > 1 and ai_archetype == EnemyArchetype.LIGHT_FIREARM
+
+
+func _find_cover_position(threat_position: Vector2, movement_position: Vector2) -> Vector2:
+	var best_position := Vector2.INF
+	var best_score := -INF
+	var probes := maxi(cover_probe_count, 6)
+	var desired_range := clampf(preferred_range, retreat_range + 32.0, detection_range)
+	var radius_steps := [0.35, 0.62, 0.86, 1.0]
+
+	for radius_ratio in radius_steps:
+		var radius := cover_search_radius * float(radius_ratio)
+		for index in range(probes):
+			var angle := TAU * float(index) / float(probes)
+			var candidate := global_position + Vector2.RIGHT.rotated(angle) * radius
+			var score := _score_cover_position(candidate, threat_position, movement_position, desired_range)
+			if score > best_score:
+				best_score = score
+				best_position = candidate
+
+	if best_position == Vector2.INF:
+		return Vector2.INF
+
+	return best_position
+
+
+func _score_cover_position(
+	candidate: Vector2,
+	threat_position: Vector2,
+	movement_position: Vector2,
+	desired_range: float
+) -> float:
+	if not _is_position_clear(candidate):
+		return -INF
+	if not _has_clear_line_between(candidate, threat_position):
+		return -INF
+
+	var threat_distance := candidate.distance_to(threat_position)
+	if threat_distance < cover_min_threat_distance:
+		return -INF
+	if threat_distance > detection_range * 1.05:
+		return -INF
+
+	var cover_distance := _get_cover_adjacency_distance(candidate, threat_position)
+	if cover_distance == INF:
+		return -INF
+
+	var travel_distance := global_position.distance_to(candidate)
+	var role_distance := candidate.distance_to(movement_position)
+	var range_penalty := absf(threat_distance - desired_range)
+	var cover_bonus := cover_adjacency_distance - cover_distance
+	var score := cover_bonus * 1.4
+	score -= travel_distance * 0.34
+	score -= role_distance * 0.12
+	score -= range_penalty * 0.22
+	if ai_personality == EnemyPersonality.CAUTIOUS:
+		score += 18.0
+	elif ai_personality == EnemyPersonality.COWARDLY:
+		score += 28.0
+	if _current_group_role == GroupTacticRole.SUPPRESS:
+		score += 22.0
+
+	return score
+
+
+func _is_valid_cover_position(position: Vector2, threat_position: Vector2) -> bool:
+	if position == Vector2.INF:
+		return false
+	if not _is_position_clear(position):
+		return false
+	if not _has_clear_line_between(position, threat_position):
+		return false
+	if position.distance_squared_to(threat_position) < cover_min_threat_distance * cover_min_threat_distance:
+		return false
+
+	return _get_cover_adjacency_distance(position, threat_position) != INF
+
+
+func _is_position_clear(position: Vector2) -> bool:
+	var shape := CircleShape2D.new()
+	shape.radius = cover_shape_radius
+
+	var query := PhysicsShapeQueryParameters2D.new()
+	query.shape = shape
+	query.transform = Transform2D(0.0, position)
+	query.collision_mask = line_of_sight_blocker_mask
+	query.exclude = [get_rid()]
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	return get_world_2d().direct_space_state.intersect_shape(query, 1).is_empty()
+
+
+func _has_clear_line_between(from_position: Vector2, to_position: Vector2) -> bool:
+	if from_position.distance_squared_to(to_position) <= 1.0:
+		return true
+
+	var query := PhysicsRayQueryParameters2D.new()
+	query.from = from_position
+	query.to = to_position
+	query.collision_mask = line_of_sight_blocker_mask
+	query.exclude = [get_rid()]
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	return get_world_2d().direct_space_state.intersect_ray(query).is_empty()
+
+
+func _get_cover_adjacency_distance(candidate: Vector2, threat_position: Vector2) -> float:
+	var away_from_threat := candidate - threat_position
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = candidate - global_position
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = _facing_direction
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = Vector2.RIGHT
+
+	var away := away_from_threat.normalized()
+	var side := Vector2(-away.y, away.x)
+	var probe_directions := [
+		away,
+		-away,
+		side,
+		-side,
+		(away + side).normalized(),
+		(away - side).normalized(),
+	]
+	var closest_distance := INF
+	for direction in probe_directions:
+		if direction.length_squared() <= 0.01:
+			continue
+		var hit_distance := _get_blocker_distance(candidate, direction.normalized(), cover_adjacency_distance)
+		if hit_distance < closest_distance:
+			closest_distance = hit_distance
+
+	return closest_distance
+
+
+func _get_blocker_distance(from_position: Vector2, direction: Vector2, max_distance: float) -> float:
+	var query := PhysicsRayQueryParameters2D.new()
+	query.from = from_position
+	query.to = from_position + direction * max_distance
+	query.collision_mask = line_of_sight_blocker_mask
+	query.exclude = [get_rid()]
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	var hit := get_world_2d().direct_space_state.intersect_ray(query)
+	if not hit.has("position"):
+		return INF
+
+	return from_position.distance_to(hit.get("position", query.to))
+
+
+func _move_toward_cover(cover_position: Vector2, threat_position: Vector2) -> void:
+	var to_cover := cover_position - global_position
+	if to_cover.length_squared() > cover_arrival_distance * cover_arrival_distance:
+		velocity += _get_navigation_direction_to(cover_position, to_cover.normalized()) * move_speed
+
+	var to_threat := threat_position - global_position
+	if to_threat.length_squared() > 0.01:
+		_set_aim_direction(to_threat.normalized())
+
+
+func _clear_cover_target() -> void:
+	_cover_target_position = Vector2.INF
+	_is_using_cover = false
 
 
 func _apply_fallback_velocity() -> void:
@@ -1114,7 +1332,9 @@ func _get_debug_state_text() -> String:
 			state_text = "RECOVER"
 
 	if state_text == "":
-		if _is_target_visible():
+		if _is_using_cover:
+			state_text = "COVER"
+		elif _is_target_visible():
 			state_text = "READY"
 		elif _can_see_target() and _awareness_state != AwarenessState.COMBAT:
 			state_text = "DETECT"
@@ -1397,6 +1617,7 @@ func _clear_target_awareness() -> void:
 	_is_search_probe_target = false
 	_current_group_role = GroupTacticRole.NONE
 	_is_fallback_active = false
+	_clear_cover_target()
 	_clearing_scan_directions.clear()
 	_clearing_scan_index = 0
 	_clearing_scan_step_timer = 0.0
