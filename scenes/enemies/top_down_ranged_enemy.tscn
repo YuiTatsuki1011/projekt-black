@@ -14,7 +14,7 @@ radius = 17.0
 
 [node name="TopDownRangedEnemy" type="CharacterBody2D"]
 collision_layer = 8
-collision_mask = 3
+collision_mask = 11
 script = ExtResource("1_ranged")
 projectile_scene = ExtResource("6_enemy_projectile")
 corpse_container_scene = ExtResource("8_corpse_container")

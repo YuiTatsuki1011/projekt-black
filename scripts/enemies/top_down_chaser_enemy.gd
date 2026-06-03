@@ -56,6 +56,8 @@ enum AwarenessState {
 @export var clearing_scan_step_time: float = 0.28
 @export var corner_clearing_angle_degrees: float = 28.0
 @export var corner_clearing_sweep_speed: float = 5.5
+@export var search_probe_radius: float = 88.0
+@export var search_probe_investigation_time: float = 0.8
 @export var debug_vision_visible: bool = true
 @export var debug_vision_focus_distance: float = 380.0
 @export var debug_vision_segments: int = 24
@@ -109,6 +111,10 @@ var _clearing_scan_index: int = 0
 var _clearing_scan_step_timer: float = 0.0
 var _corner_clearing_phase: float = 0.0
 var _is_post_combat_search: bool = false
+var _search_probe_points: Array[Vector2] = []
+var _search_probe_index: int = 0
+var _has_search_probe_plan: bool = false
+var _is_search_probe_target: bool = false
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -378,6 +384,10 @@ func _update_target_awareness(delta: float) -> void:
 		_detection_progress = 0.0
 		_combat_peripheral_tracking_timer = 0.0
 		_is_post_combat_search = true
+		_is_search_probe_target = false
+		_has_search_probe_plan = false
+		_search_probe_points.clear()
+		_search_probe_index = 0
 		_awareness_timer = maxf(_awareness_timer, post_combat_search_memory_time)
 
 	_show_last_seen_marker_if_all_targets_lost(_last_seen_target_position)
@@ -400,7 +410,8 @@ func _update_target_awareness(delta: float) -> void:
 		_update_clearing_scan(delta)
 		_investigation_timer -= delta
 		if _investigation_timer <= 0.0:
-			_clear_target_awareness()
+			if not _advance_search_probe():
+				_clear_target_awareness()
 		return
 
 	_is_investigating_last_seen = false
@@ -522,10 +533,53 @@ func _update_clearing_scan(delta: float) -> void:
 
 
 func _get_current_investigation_time() -> float:
+	if _is_search_probe_target:
+		return search_probe_investigation_time
 	if _is_post_combat_search:
 		return post_combat_investigation_time
 
 	return investigation_time
+
+
+func _advance_search_probe() -> bool:
+	if not _is_post_combat_search:
+		return false
+	if not _has_search_probe_plan:
+		_build_search_probe_plan()
+	if _search_probe_index >= _search_probe_points.size():
+		return false
+
+	_last_seen_target_position = _search_probe_points[_search_probe_index]
+	_search_probe_index += 1
+	_is_search_probe_target = true
+	_is_investigating_last_seen = false
+	_investigation_timer = 0.0
+	_clearing_scan_directions.clear()
+	_awareness_timer = maxf(_awareness_timer, search_probe_investigation_time + 0.4)
+	return true
+
+
+func _build_search_probe_plan() -> void:
+	var origin := _last_seen_target_position
+	var base_direction := _estimated_target_velocity.normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = (_last_seen_target_position - global_position).normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = _facing_direction.normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = Vector2.RIGHT
+
+	var side_angle := deg_to_rad(65.0)
+	var back_angle := deg_to_rad(140.0)
+	_search_probe_points = [
+		origin + base_direction * search_probe_radius,
+		origin + base_direction.rotated(-side_angle) * search_probe_radius,
+		origin + base_direction.rotated(side_angle) * search_probe_radius,
+		origin + base_direction.rotated(-back_angle) * search_probe_radius * 0.7,
+		origin + base_direction.rotated(back_angle) * search_probe_radius * 0.7,
+	]
+	_search_probe_index = 0
+	_has_search_probe_plan = true
 
 
 func _get_debug_state_text() -> String:
@@ -746,6 +800,10 @@ func _clear_target_awareness() -> void:
 	_estimated_target_velocity = Vector2.ZERO
 	_combat_peripheral_tracking_timer = 0.0
 	_is_post_combat_search = false
+	_search_probe_points.clear()
+	_search_probe_index = 0
+	_has_search_probe_plan = false
+	_is_search_probe_target = false
 	_clearing_scan_directions.clear()
 	_clearing_scan_index = 0
 	_clearing_scan_step_timer = 0.0
