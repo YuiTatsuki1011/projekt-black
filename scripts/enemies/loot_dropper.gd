@@ -33,6 +33,27 @@ func drop_at(spawn_position: Vector2, drop_parent: Node = null) -> Array[Node]:
 	if parent == null:
 		parent = get_tree().root
 
+	for loot_entry in roll_loot():
+		var item_id: StringName = loot_entry.get("item_id", &"")
+		var quantity: int = int(loot_entry.get("quantity", 1))
+		var metadata: Dictionary = loot_entry.get("metadata", {})
+		var dropped_item := scene.instantiate()
+		dropped_item.set("item_id", item_id)
+		dropped_item.set("quantity", quantity)
+		dropped_item.set("metadata", metadata)
+		parent.add_child(dropped_item)
+
+		if dropped_item is Node2D:
+			var dropped_item_2d := dropped_item as Node2D
+			dropped_item_2d.global_position = _get_drop_position(spawn_position, spawned_items.size())
+
+		spawned_items.append(dropped_item)
+
+	return spawned_items
+
+
+func roll_loot() -> Array[Dictionary]:
+	var loot_entries: Array[Dictionary] = []
 	for index in item_ids.size():
 		var item_id := item_ids[index]
 		if item_id == &"":
@@ -49,19 +70,13 @@ func drop_at(spawn_position: Vector2, drop_parent: Node = null) -> Array[Node]:
 		if not metadata.is_empty():
 			quantity = 1
 
-		var dropped_item := scene.instantiate()
-		dropped_item.set("item_id", item_id)
-		dropped_item.set("quantity", quantity)
-		dropped_item.set("metadata", metadata)
-		parent.add_child(dropped_item)
+		loot_entries.append({
+			"item_id": item_id,
+			"quantity": quantity,
+			"metadata": metadata,
+		})
 
-		if dropped_item is Node2D:
-			var dropped_item_2d := dropped_item as Node2D
-			dropped_item_2d.global_position = _get_drop_position(spawn_position, spawned_items.size())
-
-		spawned_items.append(dropped_item)
-
-	return spawned_items
+	return loot_entries
 
 
 func _get_drop_position(spawn_position: Vector2, drop_index: int) -> Vector2:

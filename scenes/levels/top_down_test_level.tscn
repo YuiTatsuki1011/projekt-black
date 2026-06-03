@@ -1,4 +1,4 @@
-[gd_scene load_steps=17 format=3]
+[gd_scene load_steps=18 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
@@ -11,6 +11,7 @@
 [ext_resource type="PackedScene" path="res://scenes/interaction/item_grant_button.tscn" id="9_item_grant_button"]
 [ext_resource type="PackedScene" path="res://scenes/interaction/item_container.tscn" id="10_item_container"]
 [ext_resource type="PackedScene" path="res://scenes/enemies/top_down_chaser_enemy.tscn" id="11_top_down_chaser"]
+[ext_resource type="PackedScene" path="res://scenes/enemies/top_down_ranged_enemy.tscn" id="12_top_down_ranged"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_horizontal_wall"]
 size = Vector2(960, 32)
@@ -164,6 +165,12 @@ position = Vector2(650, 292)
 [node name="ChaserB" parent="Enemies" instance=ExtResource("11_top_down_chaser")]
 position = Vector2(830, 520)
 
+[node name="GunnerA" parent="Enemies" instance=ExtResource("12_top_down_ranged")]
+position = Vector2(812, 292)
+
+[node name="GunnerB" parent="Enemies" instance=ExtResource("12_top_down_ranged")]
+position = Vector2(540, 520)
+
 [node name="TargetButton" parent="." instance=ExtResource("7_spawn_button")]
 position = Vector2(162, 142)
 spawn_scene = ExtResource("8_training_target")
@@ -185,8 +192,13 @@ position = Vector2(630, 142)
 spawn_scene = ExtResource("11_top_down_chaser")
 button_label = "CHASER"
 
+[node name="GunnerButton" parent="." instance=ExtResource("7_spawn_button")]
+position = Vector2(786, 142)
+spawn_scene = ExtResource("12_top_down_ranged")
+button_label = "GUNNER"
+
 [node name="LootBox" parent="." instance=ExtResource("10_item_container")]
-position = Vector2(780, 170)
+position = Vector2(900, 170)
 container_label = "LOOT BOX"
 
 [node name="Crosshair" parent="." instance=ExtResource("2_crosshair")]

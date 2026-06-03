@@ -1,0 +1,67 @@
+[gd_scene load_steps=11 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/top_down_ranged_enemy.gd" id="1_ranged"]
+[ext_resource type="Script" path="res://scripts/combat/health.gd" id="2_health"]
+[ext_resource type="PackedScene" path="res://scenes/ui/health_indicator.tscn" id="3_health_indicator"]
+[ext_resource type="PackedScene" path="res://scenes/vfx/hit_burst.tscn" id="4_hit_burst"]
+[ext_resource type="PackedScene" path="res://scenes/vfx/death_burst.tscn" id="5_death_burst"]
+[ext_resource type="PackedScene" path="res://scenes/weapons/enemy_projectile.tscn" id="6_enemy_projectile"]
+[ext_resource type="Script" path="res://scripts/enemies/loot_dropper.gd" id="7_loot_dropper"]
+[ext_resource type="PackedScene" path="res://scenes/interaction/corpse_container.tscn" id="8_corpse_container"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_body"]
+radius = 17.0
+
+[node name="TopDownRangedEnemy" type="CharacterBody2D"]
+collision_layer = 8
+collision_mask = 3
+script = ExtResource("1_ranged")
+projectile_scene = ExtResource("6_enemy_projectile")
+corpse_container_scene = ExtResource("8_corpse_container")
+hit_vfx_scene = ExtResource("4_hit_burst")
+death_vfx_scene = ExtResource("5_death_burst")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_body")
+
+[node name="BodyVisual" type="Polygon2D" parent="."]
+color = Color(0.16, 0.17, 0.22, 1)
+polygon = PackedVector2Array(-17, -12, -4, -19, 14, -15, 20, 1, 11, 17, -12, 15, -20, -1)
+
+[node name="Eye" type="Polygon2D" parent="BodyVisual"]
+position = Vector2(7, -4)
+color = Color(0.92, 0.08, 0.05, 1)
+polygon = PackedVector2Array(-4, -3, 4, -3, 5, 2, -3, 3)
+
+[node name="GunRoot" type="Node2D" parent="."]
+position = Vector2(11, -2)
+
+[node name="GunBody" type="Polygon2D" parent="GunRoot"]
+color = Color(0.045, 0.045, 0.055, 1)
+polygon = PackedVector2Array(0, -3, 22, -3, 24, -1, 24, 3, 0, 3)
+
+[node name="Muzzle" type="Marker2D" parent="GunRoot"]
+position = Vector2(24, 0)
+
+[node name="TelegraphLine" type="Line2D" parent="."]
+visible = false
+z_index = 4
+width = 2.0
+default_color = Color(1, 0.12, 0.06, 0.56)
+
+[node name="Health" type="Node" parent="."]
+script = ExtResource("2_health")
+max_health = 42
+current_health = 42
+
+[node name="HealthIndicator" parent="." instance=ExtResource("3_health_indicator")]
+position = Vector2(0, -34)
+
+[node name="LootDropper" type="Node" parent="."]
+script = ExtResource("7_loot_dropper")
+item_ids = Array[StringName]([&"pistol_ammo"])
+drop_chances = Array[float]([1.0])
+min_quantities = Array[int]([5])
+max_quantities = Array[int]([10])
+drop_offset = Vector2(0, 0)
+spread_radius = 18.0

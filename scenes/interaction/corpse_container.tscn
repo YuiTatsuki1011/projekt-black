@@ -1,0 +1,47 @@
+[gd_scene load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/interaction/item_container.gd" id="1_item_container"]
+[ext_resource type="Script" path="res://scripts/inventory/inventory.gd" id="2_inventory"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_corpse_container"]
+radius = 34.0
+
+[node name="CorpseContainer" type="Area2D"]
+collision_layer = 16
+collision_mask = 0
+script = ExtResource("1_item_container")
+container_label = "CORPSE"
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_corpse_container")
+
+[node name="Body" type="Polygon2D" parent="."]
+color = Color(0.11, 0.095, 0.09, 1)
+polygon = PackedVector2Array(-30, -10, -12, -24, 14, -20, 30, -4, 20, 20, -8, 24, -28, 8)
+
+[node name="Mark" type="Polygon2D" parent="."]
+color = Color(0.28, 0.04, 0.035, 1)
+polygon = PackedVector2Array(-20, -5, 5, -10, 22, 5, 7, 15, -16, 12)
+
+[node name="Label" type="Label" parent="."]
+offset_left = -58.0
+offset_top = -50.0
+offset_right = 58.0
+offset_bottom = -30.0
+theme_override_font_sizes/font_size = 10
+text = "CORPSE"
+horizontal_alignment = 1
+
+[node name="Prompt" type="Label" parent="."]
+offset_left = -20.0
+offset_top = 30.0
+offset_right = 20.0
+offset_bottom = 46.0
+theme_override_font_sizes/font_size = 9
+text = "F"
+horizontal_alignment = 1
+
+[node name="Inventory" type="Node" parent="."]
+script = ExtResource("2_inventory")
+grid_width = 10
+grid_height = 3

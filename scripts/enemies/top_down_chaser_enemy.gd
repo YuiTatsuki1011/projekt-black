@@ -21,6 +21,7 @@ enum AttackState {
 @export var separation_push_speed: float = 420.0
 @export var hit_vfx_scene: PackedScene
 @export var death_vfx_scene: PackedScene
+@export var corpse_container_scene: PackedScene
 @export var knockback_strength: float = 130.0
 @export var knockback_recovery: float = 500.0
 @export var hit_flash_time: float = 0.08
@@ -244,8 +245,7 @@ func _on_died() -> void:
 
 	_is_dead = true
 	_spawn_vfx(death_vfx_scene, global_position)
-	if loot_dropper != null and loot_dropper.has_method("drop_at"):
-		loot_dropper.call("drop_at", global_position, get_parent())
+	_spawn_loot_container()
 	queue_free()
 
 
@@ -272,3 +272,45 @@ func _spawn_vfx(vfx_scene: PackedScene, spawn_position: Vector2) -> void:
 	if vfx is Node2D:
 		var vfx_2d := vfx as Node2D
 		vfx_2d.global_position = spawn_position
+
+
+func _spawn_loot_container() -> void:
+	if corpse_container_scene == null:
+		if loot_dropper != null and loot_dropper.has_method("drop_at"):
+			loot_dropper.call("drop_at", global_position, get_parent())
+		return
+
+	var corpse := corpse_container_scene.instantiate()
+	var corpse_parent := get_parent()
+	if corpse_parent == null:
+		corpse_parent = get_tree().current_scene
+	if corpse_parent == null:
+		corpse_parent = get_tree().root
+	corpse_parent.add_child(corpse)
+
+	if corpse is Node2D:
+		var corpse_2d := corpse as Node2D
+		corpse_2d.global_position = global_position
+
+	var corpse_inventory := corpse.get_node_or_null("Inventory")
+	if corpse_inventory == null:
+		return
+
+	for loot_entry in _roll_loot_entries():
+		var item_id: StringName = loot_entry.get("item_id", &"")
+		var quantity: int = int(loot_entry.get("quantity", 1))
+		var metadata: Dictionary = loot_entry.get("metadata", {})
+		if item_id == &"":
+			continue
+		if not metadata.is_empty() and corpse_inventory.has_method("add_item_with_metadata"):
+			corpse_inventory.call("add_item_with_metadata", item_id, metadata)
+		elif corpse_inventory.has_method("add_item"):
+			corpse_inventory.call("add_item", item_id, quantity)
+
+
+func _roll_loot_entries() -> Array[Dictionary]:
+	if loot_dropper == null:
+		return []
+	if loot_dropper.has_method("roll_loot"):
+		return loot_dropper.call("roll_loot")
+	return []

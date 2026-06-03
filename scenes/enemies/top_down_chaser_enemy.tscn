@@ -1,4 +1,4 @@
-[gd_scene load_steps=9 format=3]
+[gd_scene load_steps=10 format=3]
 
 [ext_resource type="Script" path="res://scripts/enemies/top_down_chaser_enemy.gd" id="1_chaser"]
 [ext_resource type="Script" path="res://scripts/combat/health.gd" id="2_health"]
@@ -6,6 +6,7 @@
 [ext_resource type="PackedScene" path="res://scenes/vfx/hit_burst.tscn" id="4_hit_burst"]
 [ext_resource type="PackedScene" path="res://scenes/vfx/death_burst.tscn" id="5_death_burst"]
 [ext_resource type="Script" path="res://scripts/enemies/loot_dropper.gd" id="6_loot_dropper"]
+[ext_resource type="PackedScene" path="res://scenes/interaction/corpse_container.tscn" id="7_corpse_container"]
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_body"]
 radius = 18.0
@@ -19,6 +20,7 @@ collision_mask = 3
 script = ExtResource("1_chaser")
 hit_vfx_scene = ExtResource("4_hit_burst")
 death_vfx_scene = ExtResource("5_death_burst")
+corpse_container_scene = ExtResource("7_corpse_container")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 shape = SubResource("CircleShape2D_body")
