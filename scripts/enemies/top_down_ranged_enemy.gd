@@ -725,18 +725,18 @@ func _find_cover_hide_position(peek_position: Vector2, threat_position: Vector2)
 
 	var away := away_from_threat.normalized()
 	var side := Vector2(-away.y, away.x)
-	var candidate_offsets := [
+	var candidate_offsets: Array[Vector2] = [
 		away,
 		(away + side * 0.55).normalized(),
 		(away - side * 0.55).normalized(),
 		side,
 		-side,
 	]
-	for direction in candidate_offsets:
+	for direction: Vector2 in candidate_offsets:
 		if direction.length_squared() <= 0.01:
 			continue
 
-		var candidate := peek_position + direction.normalized() * cover_hide_offset
+		var candidate: Vector2 = peek_position + direction.normalized() * cover_hide_offset
 		if not _is_position_clear(candidate):
 			continue
 		if _has_clear_line_between(candidate, threat_position):
