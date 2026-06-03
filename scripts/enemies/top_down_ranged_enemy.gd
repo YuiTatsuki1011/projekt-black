@@ -778,6 +778,7 @@ func _enter_lost_target_search() -> void:
 	_search_probe_index = 0
 	_choose_lost_target_decision()
 	_choose_lost_target_squad_role()
+	_clear_cover_target()
 
 	var memory_time := post_combat_search_memory_time
 	match _lost_target_decision:
@@ -1788,9 +1789,10 @@ func _update_target_awareness(delta: float) -> void:
 		return
 
 	if _awareness_state == AwarenessState.COMBAT and _cover_action_state == CoverActionState.HIDE:
-		_awareness_timer = maxf(_awareness_timer, search_memory_time)
-		_hide_last_seen_marker()
-		return
+		if _cover_action_timer > 0.0:
+			_awareness_timer = maxf(_awareness_timer, search_memory_time)
+			_hide_last_seen_marker()
+			return
 
 	if _awareness_state == AwarenessState.COMBAT:
 		_enter_lost_target_search()
