@@ -161,6 +161,8 @@ enum CoverActionState {
 @export var lost_target_sweep_offset_distance: float = 132.0
 @export var lost_target_sweep_forward_distance: float = 86.0
 @export var lost_target_overwatch_hold_distance: float = 220.0
+@export var lost_target_overwatch_scan_angle_degrees: float = 18.0
+@export var lost_target_overwatch_scan_speed: float = 2.2
 @export var tactical_ammo_capacity: int = 8
 @export var tactical_low_ammo_threshold: int = 2
 @export var debug_vision_visible: bool = true
@@ -344,6 +346,8 @@ func _update_velocity(delta: float) -> void:
 	var to_target := movement_position - global_position
 	var target_distance := to_target.length()
 	if target_distance <= 0.01:
+		if _lost_target_squad_role == LostTargetSquadRole.OVERWATCH and not visible_target:
+			_hold_lost_target_overwatch(target_position, delta)
 		return
 
 	var target_direction := to_target / target_distance
@@ -866,20 +870,71 @@ func _get_lost_target_squad_movement_position(base_position: Vector2) -> Vector2
 		approach_direction = Vector2.RIGHT
 
 	var side_direction := Vector2(-approach_direction.y, approach_direction.x)
+	var preferred_position := Vector2.INF
 	match _lost_target_squad_role:
 		LostTargetSquadRole.OVERWATCH:
 			var watch_distance := global_position.distance_to(base_position)
 			if watch_distance <= lost_target_overwatch_hold_distance and _has_line_of_sight_to_position(base_position):
 				return global_position
-			return base_position - approach_direction * minf(lost_target_overwatch_hold_distance, preferred_range)
+			preferred_position = base_position - approach_direction * minf(lost_target_overwatch_hold_distance, preferred_range)
 		LostTargetSquadRole.SWEEP_LEFT:
-			return base_position + side_direction * lost_target_sweep_offset_distance + approach_direction * lost_target_sweep_forward_distance
+			preferred_position = base_position + side_direction * lost_target_sweep_offset_distance + approach_direction * lost_target_sweep_forward_distance
 		LostTargetSquadRole.SWEEP_RIGHT:
-			return base_position - side_direction * lost_target_sweep_offset_distance + approach_direction * lost_target_sweep_forward_distance
+			preferred_position = base_position - side_direction * lost_target_sweep_offset_distance + approach_direction * lost_target_sweep_forward_distance
 		LostTargetSquadRole.PRESSURE:
-			return base_position + approach_direction * lost_target_sweep_forward_distance
+			preferred_position = base_position + approach_direction * lost_target_sweep_forward_distance
 
-	return Vector2.INF
+	return _get_clear_lost_target_squad_position(preferred_position, base_position)
+
+
+func _get_clear_lost_target_squad_position(preferred_position: Vector2, base_position: Vector2) -> Vector2:
+	if preferred_position == Vector2.INF:
+		return Vector2.INF
+	if _is_position_clear(preferred_position):
+		return preferred_position
+
+	var base_direction := (preferred_position - base_position).normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = (base_position - global_position).normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = _facing_direction.normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = Vector2.RIGHT
+
+	var side_direction := Vector2(-base_direction.y, base_direction.x)
+	var offsets: Array[Vector2] = [
+		side_direction * 44.0,
+		-side_direction * 44.0,
+		base_direction * 44.0,
+		-base_direction * 44.0,
+		(side_direction + base_direction).normalized() * 66.0,
+		(-side_direction + base_direction).normalized() * 66.0,
+		(side_direction - base_direction).normalized() * 66.0,
+		(-side_direction - base_direction).normalized() * 66.0,
+	]
+	for offset: Vector2 in offsets:
+		if offset.length_squared() <= 0.01:
+			continue
+
+		var candidate: Vector2 = preferred_position + offset
+		if _is_position_clear(candidate):
+			return candidate
+
+	if _is_position_clear(base_position):
+		return base_position
+
+	return preferred_position
+
+
+func _hold_lost_target_overwatch(target_position: Vector2, delta: float) -> void:
+	var to_target := target_position - global_position
+	if to_target.length_squared() <= 0.01:
+		return
+
+	var base_direction := to_target.normalized()
+	_corner_clearing_phase += delta * lost_target_overwatch_scan_speed
+	var scan_angle := deg_to_rad(lost_target_overwatch_scan_angle_degrees) * sin(_corner_clearing_phase)
+	_turn_aim_toward(base_direction.rotated(scan_angle), delta)
 
 
 func _get_combat_advantage_score() -> float:
