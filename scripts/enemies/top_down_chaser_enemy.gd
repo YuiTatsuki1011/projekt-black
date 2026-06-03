@@ -45,6 +45,7 @@ enum GroupTacticRole {
 	REAR_PRESSURE,
 	SUPPRESS,
 	GUARD,
+	FALLBACK,
 }
 
 @export var target_path: NodePath = NodePath("../../Player")
@@ -90,6 +91,15 @@ enum GroupTacticRole {
 @export_range(0, 10, 1) var unit_importance: int = 2
 @export_range(0.0, 1.0, 0.05) var ally_priority: float = 0.35
 @export_range(0.0, 1.0, 0.05) var self_preservation: float = 0.35
+@export var morale_enabled: bool = true
+@export_range(0.0, 100.0, 1.0) var base_morale: float = 68.0
+@export_range(0.0, 100.0, 1.0) var morale_break_threshold: float = 28.0
+@export_range(0.0, 40.0, 1.0) var morale_recover_margin: float = 12.0
+@export var morale_low_health_penalty: float = 34.0
+@export var morale_alone_penalty: float = 16.0
+@export var morale_ally_bonus: float = 8.0
+@export var morale_fallback_distance: float = 120.0
+@export var morale_fallback_speed_multiplier: float = 1.12
 @export var group_tactics_enabled: bool = true
 @export var group_tactic_range: float = 300.0
 @export var flank_offset_distance: float = 84.0
@@ -154,6 +164,7 @@ var _search_probe_index: int = 0
 var _has_search_probe_plan: bool = false
 var _is_search_probe_target: bool = false
 var _current_group_role: int = GroupTacticRole.NONE
+var _is_fallback_active: bool = false
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -226,6 +237,9 @@ func _update_velocity(delta: float) -> void:
 		return
 	if _is_investigating_last_seen and _attack_state == AttackState.CHASE:
 		return
+	if _is_morale_broken():
+		_apply_fallback_velocity()
+		return
 
 	var pursuit_position := _get_group_pursuit_position(_last_seen_target_position)
 	var to_target := pursuit_position - global_position
@@ -261,8 +275,8 @@ func _configure_debug_label() -> void:
 
 	_debug_label = Label.new()
 	_debug_label.name = "DebugStateLabel"
-	_debug_label.position = Vector2(-48.0, 24.0)
-	_debug_label.size = Vector2(96.0, 18.0)
+	_debug_label.position = Vector2(-60.0, 24.0)
+	_debug_label.size = Vector2(120.0, 18.0)
 	_debug_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_debug_label.add_theme_font_size_override("font_size", 8)
 	_debug_label.modulate = Color(0.72, 0.86, 0.72, 0.82)
@@ -344,6 +358,31 @@ func _get_group_pursuit_position(base_position: Vector2) -> Vector2:
 				return guard_position
 
 	return base_position
+
+
+func _apply_fallback_velocity() -> void:
+	var threat_position := _get_threat_position()
+	var away_from_threat := global_position - threat_position
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = -_facing_direction
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = Vector2.RIGHT
+
+	var fallback_direction := away_from_threat.normalized()
+	var fallback_position := global_position + fallback_direction * morale_fallback_distance
+	var move_direction := _get_navigation_direction_to(fallback_position, fallback_direction)
+	velocity += move_direction * move_speed * morale_fallback_speed_multiplier
+	_set_facing(threat_position - global_position)
+	_current_group_role = GroupTacticRole.FALLBACK
+
+
+func _get_threat_position() -> Vector2:
+	if _target != null and is_instance_valid(_target):
+		return _target.global_position
+	if _has_last_seen_target:
+		return _last_seen_target_position
+
+	return global_position - _facing_direction
 
 
 func _get_group_tactic_role() -> int:
@@ -451,6 +490,55 @@ func get_unit_importance() -> int:
 
 func get_ai_archetype() -> int:
 	return ai_archetype
+
+
+func get_morale_score() -> float:
+	return _get_morale_score()
+
+
+func _is_morale_broken() -> bool:
+	if not morale_enabled:
+		_is_fallback_active = false
+		return false
+
+	var morale_score := _get_morale_score()
+	var threshold := morale_break_threshold + morale_recover_margin if _is_fallback_active else morale_break_threshold
+	_is_fallback_active = morale_score <= threshold
+	return _is_fallback_active
+
+
+func _get_morale_score() -> float:
+	if not morale_enabled:
+		return 100.0
+
+	var morale_score := base_morale
+	var health_ratio := _get_health_ratio()
+	morale_score -= (1.0 - health_ratio) * morale_low_health_penalty
+	morale_score -= self_preservation * 10.0
+
+	var allies := maxi(_get_active_group_members().size() - 1, 0)
+	if allies <= 0:
+		morale_score -= morale_alone_penalty
+	else:
+		morale_score += minf(float(allies), 3.0) * morale_ally_bonus
+
+	match ai_personality:
+		EnemyPersonality.BRAVE:
+			morale_score += 18.0
+		EnemyPersonality.CAUTIOUS:
+			morale_score -= 6.0
+		EnemyPersonality.COWARDLY:
+			morale_score -= 22.0
+		EnemyPersonality.PROTECTIVE:
+			if allies > 0:
+				morale_score += 8.0
+		EnemyPersonality.SELFISH:
+			if allies <= 0:
+				morale_score += 4.0
+			else:
+				morale_score -= 4.0
+
+	return clampf(morale_score, 0.0, 100.0)
 
 
 func _get_self_role_score(role: int) -> float:
@@ -677,6 +765,8 @@ func _update_attack_state(delta: float) -> void:
 
 func _try_start_attack() -> void:
 	if _target == null or not _is_target_visible():
+		return
+	if _is_morale_broken():
 		return
 
 	var to_target := _target.global_position - global_position
@@ -956,9 +1046,14 @@ func _get_debug_state_text() -> String:
 		state_text = "IDLE"
 
 	if _has_last_seen_target and _current_group_role != GroupTacticRole.NONE:
-		return "%s/%s/%s" % [state_text, _get_group_role_code(_current_group_role), _get_personality_code()]
+		return "%s/%s/%s/%s" % [
+			state_text,
+			_get_group_role_code(_current_group_role),
+			_get_personality_code(),
+			_get_morale_code(),
+		]
 
-	return "%s/%s" % [state_text, _get_personality_code()]
+	return "%s/%s/%s" % [state_text, _get_personality_code(), _get_morale_code()]
 
 
 func _get_group_role_code(role: int) -> String:
@@ -975,6 +1070,8 @@ func _get_group_role_code(role: int) -> String:
 			return "SUP"
 		GroupTacticRole.GUARD:
 			return "GRD"
+		GroupTacticRole.FALLBACK:
+			return "FBK"
 
 	return "NONE"
 
@@ -993,6 +1090,10 @@ func _get_personality_code() -> String:
 			return "SLF"
 
 	return "BAL"
+
+
+func _get_morale_code() -> String:
+	return "M%02d" % int(roundf(_get_morale_score()))
 
 
 func _update_debug_label() -> void:
@@ -1198,6 +1299,7 @@ func _clear_target_awareness() -> void:
 	_has_search_probe_plan = false
 	_is_search_probe_target = false
 	_current_group_role = GroupTacticRole.NONE
+	_is_fallback_active = false
 	_clearing_scan_directions.clear()
 	_clearing_scan_index = 0
 	_clearing_scan_step_timer = 0.0
