@@ -1,6 +1,10 @@
 extends CharacterBody2D
 class_name TopDownChaserEnemy
 
+const TOP_DOWN_ENEMY_GROUP := "top_down_enemies"
+const LAST_SEEN_MARKER_NAME := "LastSeenPlayerMarker"
+const LAST_SEEN_MARKER_SCRIPT := preload("res://scripts/enemies/player_sighting_marker.gd")
+
 enum AttackState {
 	CHASE,
 	WINDUP,
@@ -9,6 +13,7 @@ enum AttackState {
 }
 
 @export var target_path: NodePath = NodePath("../../Player")
+@export var initial_facing_direction: Vector2 = Vector2.LEFT
 @export var move_speed: float = 92.0
 @export var aggro_range: float = 520.0
 @export var attack_damage: int = 16
@@ -21,6 +26,13 @@ enum AttackState {
 @export_flags_2d_physics var line_of_sight_blocker_mask: int = 1
 @export var use_navigation: bool = true
 @export var debug_state_visible: bool = true
+@export var view_angle_degrees: float = 105.0
+@export var close_detection_range: float = 42.0
+@export var shared_alert_range: float = 360.0
+@export var alert_share_delay: float = 0.45
+@export var investigation_time: float = 1.2
+@export var debug_vision_visible: bool = true
+@export var debug_last_seen_marker_visible: bool = true
 @export var desired_target_separation: float = 36.0
 @export var separation_push_speed: float = 420.0
 @export var hit_vfx_scene: PackedScene
@@ -50,15 +62,24 @@ var _has_hit_this_attack: bool = false
 var _has_last_seen_target: bool = false
 var _last_seen_target_position: Vector2 = Vector2.ZERO
 var _awareness_timer: float = 0.0
+var _facing_direction: Vector2 = Vector2.LEFT
+var _direct_sighting_share_timer: float = 0.0
+var _has_shared_current_sighting: bool = false
+var _is_investigating_last_seen: bool = false
+var _investigation_timer: float = 0.0
 var _debug_label: Label
+var _vision_cone: Polygon2D
 
 
 func _ready() -> void:
+	add_to_group(TOP_DOWN_ENEMY_GROUP)
 	_base_body_color = body_visual.color
 	_base_eye_color = eye_visual.color
+	_set_facing(initial_facing_direction)
 	_resolve_target()
 	_configure_navigation_agent()
 	_configure_debug_label()
+	_configure_vision_cone()
 	health.damaged.connect(_on_damaged)
 	health.died.connect(_on_died)
 
@@ -78,6 +99,7 @@ func _physics_process(delta: float) -> void:
 	_update_attack_state(delta)
 	_update_velocity()
 	_update_debug_label()
+	_update_debug_vision()
 	_knockback_velocity = _knockback_velocity.move_toward(Vector2.ZERO, knockback_recovery * delta)
 	move_and_slide()
 	_apply_target_separation(delta)
@@ -105,6 +127,8 @@ func _resolve_target() -> void:
 func _update_velocity() -> void:
 	velocity = _knockback_velocity
 	if not _has_last_seen_target:
+		return
+	if _is_investigating_last_seen and _attack_state == AttackState.CHASE:
 		return
 
 	var to_target := _last_seen_target_position - global_position
@@ -142,6 +166,17 @@ func _configure_debug_label() -> void:
 	_debug_label.add_theme_font_size_override("font_size", 8)
 	_debug_label.modulate = Color(0.72, 0.86, 0.72, 0.82)
 	add_child(_debug_label)
+
+
+func _configure_vision_cone() -> void:
+	if not debug_vision_visible:
+		return
+
+	_vision_cone = Polygon2D.new()
+	_vision_cone.name = "DebugVisionCone"
+	_vision_cone.z_index = -1
+	_vision_cone.color = Color(0.8, 0.95, 0.55, 0.12)
+	add_child(_vision_cone)
 
 
 func _get_navigation_direction_to(target_position: Vector2, fallback_direction: Vector2) -> Vector2:
@@ -215,6 +250,7 @@ func _try_start_attack() -> void:
 	if _attack_direction == Vector2.ZERO:
 		_attack_direction = Vector2.RIGHT
 	_set_facing(_attack_direction)
+	_share_player_sighting(_last_seen_target_position)
 	_attack_state = AttackState.WINDUP
 	_attack_timer = attack_windup_time
 	_has_hit_this_attack = false
@@ -223,22 +259,34 @@ func _try_start_attack() -> void:
 
 func _update_target_awareness(delta: float) -> void:
 	if _target == null or not is_instance_valid(_target):
-		_has_last_seen_target = false
-		_awareness_timer = 0.0
+		_clear_target_awareness()
 		return
 
 	if _is_target_visible():
-		_has_last_seen_target = true
-		_last_seen_target_position = _target.global_position
-		_awareness_timer = search_memory_time
+		_remember_target_position(_target.global_position, true)
+		_direct_sighting_share_timer += delta
+		if _direct_sighting_share_timer >= alert_share_delay and not _has_shared_current_sighting:
+			_share_player_sighting(_last_seen_target_position)
 		return
 
+	_direct_sighting_share_timer = 0.0
+	_has_shared_current_sighting = false
 	if not _has_last_seen_target:
 		return
 
+	if global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
+		if not _is_investigating_last_seen:
+			_is_investigating_last_seen = true
+			_investigation_timer = investigation_time
+		_investigation_timer -= delta
+		if _investigation_timer <= 0.0:
+			_clear_target_awareness()
+		return
+
+	_is_investigating_last_seen = false
 	_awareness_timer -= delta
-	if _awareness_timer <= 0.0 or global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
-		_has_last_seen_target = false
+	if _awareness_timer <= 0.0:
+		_clear_target_awareness()
 
 
 func _get_debug_state_text() -> String:
@@ -248,6 +296,8 @@ func _get_debug_state_text() -> String:
 		return "RECOVER"
 	if _is_target_visible():
 		return "CHASE"
+	if _is_investigating_last_seen:
+		return "INVEST"
 	if _has_last_seen_target:
 		return "SEARCH"
 	return "IDLE"
@@ -261,13 +311,34 @@ func _update_debug_label() -> void:
 	_debug_label.text = _get_debug_state_text()
 
 
+func receive_shared_player_sighting(sighting_position: Vector2, source: Node) -> void:
+	if _is_dead or source == self:
+		return
+
+	_remember_target_position(sighting_position, false)
+
+
 func _is_target_visible() -> bool:
 	if _target == null or not is_instance_valid(_target):
 		return false
 	if global_position.distance_squared_to(_target.global_position) > aggro_range * aggro_range:
 		return false
+	if not _is_target_inside_view_cone():
+		return false
 
 	return _has_line_of_sight_to_target()
+
+
+func _is_target_inside_view_cone() -> bool:
+	var to_target := _target.global_position - _get_vision_origin()
+	var target_distance := to_target.length()
+	if target_distance <= close_detection_range:
+		return true
+	if target_distance <= 0.01:
+		return true
+
+	var half_angle := deg_to_rad(view_angle_degrees * 0.5)
+	return absf(_facing_direction.normalized().angle_to(to_target.normalized())) <= half_angle
 
 
 func _has_line_of_sight_to_target() -> bool:
@@ -276,13 +347,70 @@ func _has_line_of_sight_to_target() -> bool:
 
 	var space_state := get_world_2d().direct_space_state
 	var query := PhysicsRayQueryParameters2D.new()
-	query.from = global_position
+	query.from = _get_vision_origin()
 	query.to = _target.global_position
 	query.collision_mask = line_of_sight_blocker_mask
 	query.exclude = [get_rid()]
 	query.collide_with_areas = false
 	query.collide_with_bodies = true
 	return space_state.intersect_ray(query).is_empty()
+
+
+func _get_vision_origin() -> Vector2:
+	return global_position
+
+
+func _remember_target_position(target_position: Vector2, is_direct_sighting: bool) -> void:
+	_has_last_seen_target = true
+	_last_seen_target_position = target_position
+	_awareness_timer = search_memory_time
+	_is_investigating_last_seen = false
+	_investigation_timer = 0.0
+	if is_direct_sighting and debug_last_seen_marker_visible:
+		_show_last_seen_marker(target_position)
+
+
+func _share_player_sighting(sighting_position: Vector2) -> void:
+	_has_shared_current_sighting = true
+	if debug_last_seen_marker_visible:
+		_show_last_seen_marker(sighting_position)
+
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy == self or not is_instance_valid(enemy):
+			continue
+		if not enemy is Node2D:
+			continue
+
+		var enemy_2d := enemy as Node2D
+		if global_position.distance_squared_to(enemy_2d.global_position) > shared_alert_range * shared_alert_range:
+			continue
+		if enemy.has_method("receive_shared_player_sighting"):
+			enemy.call("receive_shared_player_sighting", sighting_position, self)
+
+
+func _clear_target_awareness() -> void:
+	_has_last_seen_target = false
+	_awareness_timer = 0.0
+	_direct_sighting_share_timer = 0.0
+	_has_shared_current_sighting = false
+	_is_investigating_last_seen = false
+	_investigation_timer = 0.0
+
+
+func _show_last_seen_marker(marker_position: Vector2) -> void:
+	var marker_parent := get_tree().current_scene
+	if marker_parent == null:
+		marker_parent = get_tree().root
+
+	var marker := marker_parent.get_node_or_null(LAST_SEEN_MARKER_NAME)
+	if marker == null:
+		marker = Node2D.new()
+		marker.name = LAST_SEEN_MARKER_NAME
+		marker.set_script(LAST_SEEN_MARKER_SCRIPT)
+		marker_parent.add_child(marker)
+
+	if marker.has_method("show_sighting"):
+		marker.call("show_sighting", marker_position)
 
 
 func _enter_active_attack() -> void:
@@ -335,10 +463,30 @@ func _find_health(node: Node) -> Node:
 
 
 func _set_facing(direction: Vector2) -> void:
+	if direction.length_squared() > 0.01:
+		_facing_direction = direction.normalized()
 	if absf(direction.x) <= 0.01:
 		return
 
 	body_visual.scale.x = signf(direction.x) * absf(body_visual.scale.x)
+
+
+func _update_debug_vision() -> void:
+	if _vision_cone == null:
+		return
+
+	_vision_cone.visible = debug_vision_visible
+	if not debug_vision_visible:
+		return
+
+	var points := PackedVector2Array([Vector2.ZERO])
+	var half_angle := deg_to_rad(view_angle_degrees * 0.5)
+	var segments := 12
+	for index in range(segments + 1):
+		var ratio := float(index) / float(segments)
+		var angle := -half_angle + half_angle * 2.0 * ratio
+		points.append(_facing_direction.normalized().rotated(angle) * aggro_range)
+	_vision_cone.polygon = points
 
 
 func _pulse_windup() -> void:
