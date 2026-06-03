@@ -12,6 +12,14 @@ enum ShootState {
 	RECOVERY,
 }
 
+enum AwarenessState {
+	IDLE,
+	SUSPICIOUS,
+	INVESTIGATE,
+	COMBAT,
+	SEARCH,
+}
+
 @export var target_path: NodePath = NodePath("../../Player")
 @export var projectile_scene: PackedScene
 @export var corpse_container_scene: PackedScene
@@ -37,6 +45,11 @@ enum ShootState {
 @export var shared_alert_range: float = 380.0
 @export var alert_share_delay: float = 0.35
 @export var investigation_time: float = 1.35
+@export var suspicious_pause_time: float = 0.4
+@export var shared_sighting_confidence: float = 0.75
+@export var hearing_confidence: float = 0.45
+@export var gunshot_hearing_confidence: float = 0.7
+@export var hit_confidence: float = 0.9
 @export var debug_vision_visible: bool = true
 @export var debug_vision_focus_distance: float = 440.0
 @export var debug_vision_segments: int = 24
@@ -75,6 +88,10 @@ var _has_shared_current_sighting: bool = false
 var _is_investigating_last_seen: bool = false
 var _investigation_timer: float = 0.0
 var _detection_progress: float = 0.0
+var _awareness_state: AwarenessState = AwarenessState.IDLE
+var _stimulus_confidence: float = 0.0
+var _suspicious_timer: float = 0.0
+var _last_stimulus_type: StringName = &"none"
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -141,6 +158,8 @@ func _resolve_target() -> void:
 func _update_velocity() -> void:
 	velocity = _knockback_velocity
 	if not _has_last_seen_target:
+		return
+	if _awareness_state == AwarenessState.SUSPICIOUS:
 		return
 	if _is_investigating_last_seen:
 		return
@@ -378,12 +397,12 @@ func _update_target_awareness(delta: float) -> void:
 
 	if _can_see_target():
 		_hide_last_seen_marker()
-		if not _has_last_seen_target:
+		if _awareness_state != AwarenessState.COMBAT:
 			_detection_progress = minf(1.0, _detection_progress + delta / maxf(detection_time, 0.01))
 			if _detection_progress < 1.0:
 				return
 
-		_remember_target_position(_target.global_position, true)
+		_receive_target_stimulus(_target.global_position, 1.0, &"visual", true)
 		_direct_sighting_share_timer += delta
 		if _direct_sighting_share_timer >= alert_share_delay and not _has_shared_current_sighting:
 			_share_player_sighting(_last_seen_target_position)
@@ -395,8 +414,23 @@ func _update_target_awareness(delta: float) -> void:
 		_detection_progress = maxf(0.0, _detection_progress - delta / maxf(detection_decay_time, 0.01))
 		return
 
+	if _awareness_state == AwarenessState.COMBAT:
+		_awareness_state = AwarenessState.SEARCH
+		_detection_progress = 0.0
+
 	_show_last_seen_marker_if_all_targets_lost(_last_seen_target_position)
+	if _awareness_state == AwarenessState.SUSPICIOUS:
+		_suspicious_timer -= delta
+		_awareness_timer -= delta
+		if _awareness_timer <= 0.0:
+			_clear_target_awareness()
+			return
+		if _suspicious_timer <= 0.0:
+			_awareness_state = AwarenessState.INVESTIGATE
+		return
+
 	if global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
+		_awareness_state = AwarenessState.SEARCH
 		if not _is_investigating_last_seen:
 			_is_investigating_last_seen = true
 			_investigation_timer = investigation_time
@@ -406,6 +440,8 @@ func _update_target_awareness(delta: float) -> void:
 		return
 
 	_is_investigating_last_seen = false
+	if _awareness_state != AwarenessState.SEARCH:
+		_awareness_state = AwarenessState.INVESTIGATE
 	_awareness_timer -= delta
 	if _awareness_timer <= 0.0:
 		_clear_target_awareness()
@@ -422,9 +458,13 @@ func _get_debug_state_text() -> String:
 
 	if _is_target_visible():
 		return "READY"
-	if _can_see_target() and not _has_last_seen_target:
+	if _can_see_target() and _awareness_state != AwarenessState.COMBAT:
 		return "DETECT"
+	if _awareness_state == AwarenessState.SUSPICIOUS:
+		return "SUSPECT"
 	if _is_investigating_last_seen:
+		return "INVEST"
+	if _awareness_state == AwarenessState.INVESTIGATE:
 		return "INVEST"
 	if _has_last_seen_target:
 		return "SEARCH"
@@ -443,7 +483,7 @@ func receive_shared_player_sighting(sighting_position: Vector2, source: Node) ->
 	if _is_dead or source == self:
 		return
 
-	_remember_target_position(sighting_position, false)
+	_receive_target_stimulus(sighting_position, shared_sighting_confidence, &"shared", false)
 
 
 func receive_noise_event(noise_position: Vector2, radius: float, source: Node, _noise_type: StringName = &"generic") -> void:
@@ -457,11 +497,14 @@ func receive_noise_event(noise_position: Vector2, radius: float, source: Node, _
 	var to_noise := noise_position - global_position
 	if to_noise.length_squared() > 0.01:
 		_set_aim_direction(to_noise.normalized())
-	_remember_target_position(noise_position, false)
+	var confidence := hearing_confidence
+	if _noise_type == &"gunshot":
+		confidence = maxf(confidence, gunshot_hearing_confidence)
+	_receive_target_stimulus(noise_position, confidence, &"noise", false)
 
 
 func has_direct_target_sighting() -> bool:
-	return not _is_dead and _can_see_target()
+	return not _is_dead and _awareness_state == AwarenessState.COMBAT and _can_see_target()
 
 
 func has_active_player_sighting() -> bool:
@@ -473,11 +516,11 @@ func is_in_combat_with_target() -> bool:
 		return false
 	if _shoot_state == ShootState.TRACKING or _shoot_state == ShootState.WINDUP:
 		return true
-	return _is_target_visible()
+	return _awareness_state == AwarenessState.COMBAT and _can_see_target()
 
 
 func _is_target_visible() -> bool:
-	return _has_last_seen_target and _can_see_target()
+	return _awareness_state == AwarenessState.COMBAT and _has_last_seen_target and _can_see_target()
 
 
 func _can_see_target() -> bool:
@@ -539,13 +582,39 @@ func _get_vision_origin() -> Vector2:
 
 
 func _remember_target_position(target_position: Vector2, is_direct_sighting: bool) -> void:
+	var confidence := 1.0 if is_direct_sighting else shared_sighting_confidence
+	var stimulus_type: StringName = &"visual" if is_direct_sighting else &"shared"
+	_receive_target_stimulus(target_position, confidence, stimulus_type, is_direct_sighting)
+
+
+func _receive_target_stimulus(
+	stimulus_position: Vector2,
+	confidence: float,
+	stimulus_type: StringName,
+	is_direct_sighting: bool
+) -> void:
 	_has_last_seen_target = true
-	_last_seen_target_position = target_position
+	_last_seen_target_position = stimulus_position
 	_awareness_timer = search_memory_time
 	_is_investigating_last_seen = false
 	_investigation_timer = 0.0
-	if is_direct_sighting and debug_last_seen_marker_visible:
-		_hide_last_seen_marker()
+	_stimulus_confidence = clampf(maxf(_stimulus_confidence, confidence), 0.0, 1.0)
+	_last_stimulus_type = stimulus_type
+	if is_direct_sighting:
+		_awareness_state = AwarenessState.COMBAT
+		_suspicious_timer = 0.0
+		_detection_progress = 1.0
+		if debug_last_seen_marker_visible:
+			_hide_last_seen_marker()
+		return
+
+	if stimulus_type == &"noise":
+		_awareness_state = AwarenessState.SUSPICIOUS
+		_suspicious_timer = suspicious_pause_time
+	else:
+		_awareness_state = AwarenessState.INVESTIGATE
+		_suspicious_timer = 0.0
+	_detection_progress = 0.0
 
 
 func _react_to_attack_source(hit_direction: Vector2) -> void:
@@ -563,7 +632,7 @@ func _react_to_attack_source(hit_direction: Vector2) -> void:
 	var to_source := source_position - global_position
 	if to_source.length_squared() > 0.01:
 		_set_aim_direction(to_source.normalized())
-	_remember_target_position(source_position, false)
+	_receive_target_stimulus(source_position, hit_confidence, &"hit", false)
 
 
 func _share_player_sighting(sighting_position: Vector2) -> void:
@@ -592,6 +661,10 @@ func _clear_target_awareness() -> void:
 	_is_investigating_last_seen = false
 	_investigation_timer = 0.0
 	_detection_progress = 0.0
+	_awareness_state = AwarenessState.IDLE
+	_stimulus_confidence = 0.0
+	_suspicious_timer = 0.0
+	_last_stimulus_type = &"none"
 	_hide_last_seen_marker_if_no_active_sightings()
 
 
@@ -720,6 +793,8 @@ func _get_debug_vision_color() -> Color:
 		return Color(1.0, 0.14, 0.08, 0.2)
 	if _detection_progress > 0.01:
 		return Color(1.0, 0.74, 0.1, 0.12 + 0.12 * _detection_progress)
+	if _awareness_state == AwarenessState.SUSPICIOUS:
+		return Color(1.0, 0.82, 0.32, 0.08)
 	if _has_last_seen_target:
 		return Color(0.42, 0.62, 1.0, 0.09)
 
@@ -748,7 +823,7 @@ func _update_detection_bar() -> void:
 	if _detection_bar_root == null or _detection_bar_fill == null:
 		return
 
-	var should_show := _detection_progress > 0.01 and not _has_last_seen_target
+	var should_show := _detection_progress > 0.01 and _awareness_state != AwarenessState.COMBAT
 	_detection_bar_root.visible = should_show
 	if not should_show:
 		return
