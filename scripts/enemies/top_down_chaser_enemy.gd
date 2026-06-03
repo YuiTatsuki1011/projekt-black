@@ -100,6 +100,8 @@ enum GroupTacticRole {
 @export var debug_last_seen_marker_visible: bool = true
 @export var desired_target_separation: float = 36.0
 @export var separation_push_speed: float = 420.0
+@export var enemy_separation_radius: float = 42.0
+@export var enemy_separation_strength: float = 160.0
 @export var hearing_sensitivity: float = 1.0
 @export var hit_vfx_scene: PackedScene
 @export var death_vfx_scene: PackedScene
@@ -187,6 +189,7 @@ func _physics_process(delta: float) -> void:
 	_update_visual_tracking(delta)
 	_update_attack_state(delta)
 	_update_velocity(delta)
+	_apply_enemy_separation_velocity()
 	_update_debug_label()
 	_update_debug_vision()
 	_update_detection_bar()
@@ -613,6 +616,43 @@ func _apply_target_separation(delta: float) -> void:
 	var separation_delta := desired_target_separation - target_distance
 	var max_push := separation_push_speed * delta
 	global_position += away_direction * minf(separation_delta, max_push)
+
+
+func _apply_enemy_separation_velocity() -> void:
+	if enemy_separation_radius <= 0.0 or enemy_separation_strength <= 0.0:
+		return
+
+	var separation := Vector2.ZERO
+	var separation_radius_squared := enemy_separation_radius * enemy_separation_radius
+	var self_id := get_instance_id()
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy == self or enemy == null or not is_instance_valid(enemy):
+			continue
+		if not enemy is Node2D:
+			continue
+
+		var enemy_2d := enemy as Node2D
+		var away_from_enemy := global_position - enemy_2d.global_position
+		var distance_squared := away_from_enemy.length_squared()
+		if distance_squared > separation_radius_squared:
+			continue
+		if distance_squared <= 0.01:
+			var angle_seed := float((self_id + enemy.get_instance_id()) % 360)
+			away_from_enemy = Vector2.RIGHT.rotated(deg_to_rad(angle_seed))
+			if self_id < enemy.get_instance_id():
+				away_from_enemy = -away_from_enemy
+			distance_squared = 1.0
+
+		var distance := sqrt(distance_squared)
+		var separation_weight := 1.0 - clampf(distance / enemy_separation_radius, 0.0, 1.0)
+		separation += away_from_enemy.normalized() * separation_weight
+
+	if separation.length_squared() <= 0.0001:
+		return
+
+	if separation.length() > 1.0:
+		separation = separation.normalized()
+	velocity += separation * enemy_separation_strength
 
 
 func _update_attack_state(delta: float) -> void:
