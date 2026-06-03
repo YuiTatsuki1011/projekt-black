@@ -27,6 +27,7 @@ enum MissionObjectiveType {
 @export var mission_extract_text: String = "Reach extraction"
 @export var mission_elimination_target_id: StringName = &"mission_gunner"
 @export var mission_required_kills: int = 1
+@export var extraction_requires_objective: bool = false
 
 var _enemy_debug_vision_toggle_was_pressed: bool = false
 var _debug_noise_toggle_was_pressed: bool = false
@@ -109,7 +110,7 @@ func complete_mission_objective(objective_id: StringName, _source: Node = null) 
 		return true
 
 	_mission_objective_complete = true
-	show_mission_message("Objective secured. Extraction available.")
+	show_mission_message("Objective secured.")
 	_update_mission_display()
 	return true
 
@@ -125,7 +126,7 @@ func notify_mission_enemy_defeated(target_id: StringName, count: int = 1, _sourc
 	_mission_kill_count = mini(_mission_kill_count + maxi(count, 1), maxi(mission_required_kills, 1))
 	if _mission_kill_count >= maxi(mission_required_kills, 1):
 		_mission_objective_complete = true
-		show_mission_message("Target eliminated. Extraction available.")
+		show_mission_message("Target eliminated. Quest progress secured.")
 	else:
 		show_mission_message("Target eliminated. %d/%d" % [_mission_kill_count, mission_required_kills])
 	_update_mission_display()
@@ -134,14 +135,16 @@ func notify_mission_enemy_defeated(target_id: StringName, count: int = 1, _sourc
 func request_extraction(_source: Node = null) -> bool:
 	if _mission_complete:
 		return true
-	if not _mission_objective_complete:
+
+	if extraction_requires_objective and not _mission_objective_complete:
 		show_mission_message("Extraction locked. Complete the objective first.")
 		return false
 
 	_mission_complete = true
 	_update_mission_display()
 	if _mission_hud != null:
-		_mission_hud.show_complete("MISSION COMPLETE", "EXTRACTED WITH OBJECTIVE")
+		var subtitle := "QUEST OBJECTIVE COMPLETE" if _mission_objective_complete else "NO QUEST PROGRESS"
+		_mission_hud.show_complete("EXTRACTION COMPLETE", subtitle)
 	return true
 
 
@@ -153,24 +156,25 @@ func show_mission_message(message: String) -> void:
 func _update_mission_display() -> void:
 	if _mission_hud != null:
 		if _mission_complete:
-			_mission_hud.set_objective_text("OBJECTIVE COMPLETE")
+			_mission_hud.set_objective_text("OBJECTIVE COMPLETE" if _mission_objective_complete else "OBJECTIVE INCOMPLETE")
 			_mission_hud.set_status_text("EXTRACTED")
 		elif _mission_objective_complete:
 			_mission_hud.set_objective_text("OBJECTIVE: %s" % mission_extract_text.to_upper())
-			_mission_hud.set_status_text("RETURN TO EXTRACTION")
+			_mission_hud.set_status_text("EXTRACT WHEN READY")
 		elif mission_objective_type == MissionObjectiveType.ELIMINATION:
 			_mission_hud.set_objective_text("OBJECTIVE: %s %d/%d" % [
 				mission_objective_text.to_upper(),
 				_mission_kill_count,
 				maxi(mission_required_kills, 1),
 			])
-			_mission_hud.set_status_text("TARGET ACTIVE")
+			_mission_hud.set_status_text("EXTRACTION AVAILABLE")
 		else:
 			_mission_hud.set_objective_text("OBJECTIVE: %s" % mission_objective_text.to_upper())
-			_mission_hud.set_status_text("IN PROGRESS")
+			_mission_hud.set_status_text("EXTRACTION AVAILABLE")
 
 	if _extraction_point != null and _extraction_point.has_method("set_extraction_ready"):
-		_extraction_point.call("set_extraction_ready", _mission_objective_complete and not _mission_complete)
+		var extraction_ready := not _mission_complete and (not extraction_requires_objective or _mission_objective_complete)
+		_extraction_point.call("set_extraction_ready", extraction_ready)
 
 
 func _is_player_stealth_mode_active() -> bool:

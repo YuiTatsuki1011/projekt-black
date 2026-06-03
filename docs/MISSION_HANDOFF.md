@@ -23,5 +23,14 @@
   - `mission_target_weight`
 - Mission-target enemies notify the current level through `notify_mission_enemy_defeated(...)` when they die.
 - `TopDownTestLevel` now supports `MissionObjectiveType.ELIMINATION`.
-- The test level starts with a marked `MissionGunner` target. Killing it completes the objective and unlocks extraction.
+- The test level starts with a marked `MissionGunner` target. Killing it completes the objective; extraction itself is not locked by default.
 - The old interact objective scene still exists for future mixed-objective tests, but it is no longer placed in the current top-down test level.
+
+## 2026-06-04: Extraction Is Run-Based, Not Quest-Locked
+
+- Normal run extraction should be available even when the current quest objective is incomplete.
+- `TopDownTestLevel.request_extraction(...)` now completes extraction by default regardless of objective progress.
+- Quest progress is reported separately at extraction:
+  - `QUEST OBJECTIVE COMPLETE` if the active objective was completed.
+  - `NO QUEST PROGRESS` if the player extracted without completing it.
+- `extraction_requires_objective` remains as an exported test option for special locked-extraction experiments, but its default is `false`.
