@@ -20,6 +20,33 @@ enum AwarenessState {
 	SEARCH,
 }
 
+enum EnemyArchetype {
+	LIGHT_MELEE,
+	LIGHT_FIREARM,
+	HEAVY_ASSAULT,
+	SUPPORT,
+	BEAST,
+}
+
+enum EnemyPersonality {
+	BALANCED,
+	BRAVE,
+	CAUTIOUS,
+	COWARDLY,
+	PROTECTIVE,
+	SELFISH,
+}
+
+enum GroupTacticRole {
+	NONE,
+	DIRECT,
+	LEFT_FLANK,
+	RIGHT_FLANK,
+	REAR_PRESSURE,
+	SUPPRESS,
+	GUARD,
+}
+
 @export var target_path: NodePath = NodePath("../../Player")
 @export var projectile_scene: PackedScene
 @export var corpse_container_scene: PackedScene
@@ -62,6 +89,11 @@ enum AwarenessState {
 @export var corner_clearing_sweep_speed: float = 4.8
 @export var search_probe_radius: float = 96.0
 @export var search_probe_investigation_time: float = 0.9
+@export_enum("Light Melee", "Light Firearm", "Heavy Assault", "Support", "Beast") var ai_archetype: int = EnemyArchetype.LIGHT_FIREARM
+@export_enum("Balanced", "Brave", "Cautious", "Cowardly", "Protective", "Selfish") var ai_personality: int = EnemyPersonality.CAUTIOUS
+@export_range(0, 10, 1) var unit_importance: int = 2
+@export_range(0.0, 1.0, 0.05) var ally_priority: float = 0.3
+@export_range(0.0, 1.0, 0.05) var self_preservation: float = 0.55
 @export var group_tactics_enabled: bool = true
 @export var group_tactic_range: float = 320.0
 @export var flank_offset_distance: float = 96.0
@@ -121,6 +153,7 @@ var _search_probe_points: Array[Vector2] = []
 var _search_probe_index: int = 0
 var _has_search_probe_plan: bool = false
 var _is_search_probe_target: bool = false
+var _current_group_role: int = GroupTacticRole.NONE
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -230,8 +263,8 @@ func _configure_debug_label() -> void:
 
 	_debug_label = Label.new()
 	_debug_label.name = "DebugStateLabel"
-	_debug_label.position = Vector2(-38.0, 26.0)
-	_debug_label.size = Vector2(76.0, 16.0)
+	_debug_label.position = Vector2(-52.0, 26.0)
+	_debug_label.size = Vector2(104.0, 18.0)
 	_debug_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_debug_label.add_theme_font_size_override("font_size", 8)
 	_debug_label.modulate = Color(0.92, 0.72, 0.58, 0.82)
@@ -288,8 +321,9 @@ func _get_navigation_direction_to(target_position: Vector2, fallback_direction: 
 
 
 func _get_group_pursuit_position(base_position: Vector2) -> Vector2:
-	var role_index := _get_group_tactic_role_index()
-	if role_index < 0:
+	var role := _get_group_tactic_role()
+	_current_group_role = role
+	if role == GroupTacticRole.NONE:
 		return base_position
 
 	var approach_direction := (base_position - global_position).normalized()
@@ -299,24 +333,60 @@ func _get_group_pursuit_position(base_position: Vector2) -> Vector2:
 		return base_position
 
 	var side_direction := Vector2(-approach_direction.y, approach_direction.x)
-	match role_index:
-		1:
+	match role:
+		GroupTacticRole.LEFT_FLANK:
 			return base_position + side_direction * flank_offset_distance
-		2:
+		GroupTacticRole.RIGHT_FLANK:
 			return base_position - side_direction * flank_offset_distance
-		3:
+		GroupTacticRole.REAR_PRESSURE:
 			return base_position + approach_direction * rear_pressure_offset_distance
+		GroupTacticRole.SUPPRESS:
+			if _has_line_of_sight_to_position(base_position):
+				return global_position
+		GroupTacticRole.GUARD:
+			var guard_position := _get_guard_position(base_position)
+			if guard_position != Vector2.INF:
+				return guard_position
 
 	return base_position
 
 
-func _get_group_tactic_role_index() -> int:
+func _get_group_tactic_role() -> int:
 	if not group_tactics_enabled or not _has_last_seen_target:
-		return -1
+		return GroupTacticRole.NONE
 
-	var active_count := 0
-	var lower_id_count := 0
-	var self_id := get_instance_id()
+	var members := _get_active_group_members()
+	if members.size() <= 1:
+		return GroupTacticRole.NONE
+
+	var direct_candidate := _get_best_role_candidate(members, GroupTacticRole.DIRECT)
+	if direct_candidate == self:
+		return GroupTacticRole.DIRECT
+
+	if (
+		_get_self_role_score(GroupTacticRole.GUARD) >= 60.0
+		and _get_guard_target(members) != null
+		and _get_best_role_candidate_excluding(members, GroupTacticRole.GUARD, direct_candidate) == self
+	):
+		return GroupTacticRole.GUARD
+
+	if (
+		_get_self_role_score(GroupTacticRole.SUPPRESS) >= 62.0
+		and _get_best_role_candidate_excluding(members, GroupTacticRole.SUPPRESS, direct_candidate) == self
+	):
+		return GroupTacticRole.SUPPRESS
+
+	var flank_rank := _get_group_rank(members)
+	if flank_rank % 3 == 0:
+		return GroupTacticRole.LEFT_FLANK
+	if flank_rank % 3 == 1:
+		return GroupTacticRole.RIGHT_FLANK
+
+	return GroupTacticRole.REAR_PRESSURE
+
+
+func _get_active_group_members() -> Array:
+	var members := []
 	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
 		if enemy == null or not is_instance_valid(enemy):
 			continue
@@ -331,14 +401,200 @@ func _get_group_tactic_role_index() -> int:
 		if not bool(enemy.call("has_active_player_sighting")):
 			continue
 
-		active_count += 1
-		if enemy.get_instance_id() < self_id:
-			lower_id_count += 1
+		members.append(enemy)
 
-	if active_count <= 1:
-		return -1
+	return members
 
-	return lower_id_count % 4
+
+func _get_best_role_candidate(members: Array, role: int) -> Node:
+	return _get_best_role_candidate_excluding(members, role, null)
+
+
+func _get_best_role_candidate_excluding(members: Array, role: int, excluded_enemy: Node) -> Node:
+	var best_enemy: Node = null
+	var best_score := -INF
+	for enemy in members:
+		if enemy == excluded_enemy:
+			continue
+		var score := _get_role_score_for_enemy(enemy, role)
+		if best_enemy == null or score > best_score:
+			best_enemy = enemy
+			best_score = score
+			continue
+		if is_equal_approx(score, best_score) and enemy.get_instance_id() < best_enemy.get_instance_id():
+			best_enemy = enemy
+
+	return best_enemy
+
+
+func _get_role_score_for_enemy(enemy: Node, role: int) -> float:
+	if enemy == self:
+		return _get_self_role_score(role)
+	if enemy.has_method("get_group_role_score"):
+		return float(enemy.call("get_group_role_score", role))
+
+	return 25.0
+
+
+func _get_group_rank(members: Array) -> int:
+	var rank := 0
+	var self_id := get_instance_id()
+	for enemy in members:
+		if enemy != self and enemy.get_instance_id() < self_id:
+			rank += 1
+
+	return rank
+
+
+func get_group_role_score(role: int) -> float:
+	return _get_self_role_score(role)
+
+
+func get_unit_importance() -> int:
+	return unit_importance
+
+
+func get_ai_archetype() -> int:
+	return ai_archetype
+
+
+func _get_self_role_score(role: int) -> float:
+	var score := 0.0
+	match role:
+		GroupTacticRole.DIRECT:
+			score = 24.0
+			match ai_archetype:
+				EnemyArchetype.HEAVY_ASSAULT:
+					score += 70.0
+				EnemyArchetype.LIGHT_MELEE:
+					score += 50.0
+				EnemyArchetype.BEAST:
+					score += 54.0
+				EnemyArchetype.LIGHT_FIREARM:
+					score += 26.0
+				EnemyArchetype.SUPPORT:
+					score += 8.0
+			score += _get_personality_pressure_modifier()
+			score += _get_health_ratio() * 10.0
+			score -= self_preservation * 12.0
+		GroupTacticRole.LEFT_FLANK, GroupTacticRole.RIGHT_FLANK:
+			score = 26.0
+			match ai_archetype:
+				EnemyArchetype.LIGHT_FIREARM:
+					score += 50.0
+				EnemyArchetype.LIGHT_MELEE:
+					score += 40.0
+				EnemyArchetype.BEAST:
+					score += 28.0
+				EnemyArchetype.HEAVY_ASSAULT:
+					score += 16.0
+				EnemyArchetype.SUPPORT:
+					score += 16.0
+			if ai_personality == EnemyPersonality.CAUTIOUS:
+				score += 12.0
+			if ai_personality == EnemyPersonality.COWARDLY:
+				score -= 6.0
+		GroupTacticRole.REAR_PRESSURE:
+			score = 22.0
+			if ai_archetype == EnemyArchetype.LIGHT_FIREARM:
+				score += 48.0
+			elif ai_archetype == EnemyArchetype.LIGHT_MELEE:
+				score += 28.0
+			if ai_personality == EnemyPersonality.CAUTIOUS:
+				score += 10.0
+			score += self_preservation * 10.0
+		GroupTacticRole.SUPPRESS:
+			score = 8.0
+			if ai_archetype == EnemyArchetype.LIGHT_FIREARM:
+				score += 68.0
+			elif ai_archetype == EnemyArchetype.HEAVY_ASSAULT:
+				score += 46.0
+			if ai_personality == EnemyPersonality.CAUTIOUS:
+				score += 10.0
+			if ai_personality == EnemyPersonality.BRAVE:
+				score -= 6.0
+			score += self_preservation * 8.0
+		GroupTacticRole.GUARD:
+			score = 12.0
+			if ai_archetype == EnemyArchetype.HEAVY_ASSAULT:
+				score += 58.0
+			elif ai_archetype == EnemyArchetype.LIGHT_MELEE:
+				score += 34.0
+			elif ai_archetype == EnemyArchetype.LIGHT_FIREARM:
+				score += 24.0
+			if ai_personality == EnemyPersonality.PROTECTIVE:
+				score += 28.0
+			if ai_personality == EnemyPersonality.SELFISH:
+				score -= 35.0
+			score += ally_priority * 24.0
+
+	return score
+
+
+func _get_personality_pressure_modifier() -> float:
+	match ai_personality:
+		EnemyPersonality.BRAVE:
+			return 18.0
+		EnemyPersonality.CAUTIOUS:
+			return -8.0
+		EnemyPersonality.COWARDLY:
+			return -24.0
+		EnemyPersonality.PROTECTIVE:
+			return 6.0
+		EnemyPersonality.SELFISH:
+			return 8.0
+
+	return 0.0
+
+
+func _get_health_ratio() -> float:
+	if health == null:
+		return 1.0
+	var max_health_value := int(health.get("max_health"))
+	if max_health_value <= 0:
+		return 1.0
+
+	return clampf(float(health.get("current_health")) / float(max_health_value), 0.0, 1.0)
+
+
+func _get_guard_position(threat_position: Vector2) -> Vector2:
+	var members := _get_active_group_members()
+	var guard_target := _get_guard_target(members)
+	if guard_target == null or not guard_target is Node2D:
+		return Vector2.INF
+
+	var target_position := (guard_target as Node2D).global_position
+	var to_threat := (threat_position - target_position).normalized()
+	if to_threat.length_squared() <= 0.01:
+		to_threat = (global_position - target_position).normalized()
+	if to_threat.length_squared() <= 0.01:
+		return Vector2.INF
+
+	return target_position + to_threat * 52.0
+
+
+func _get_guard_target(members: Array) -> Node:
+	var best_target: Node = null
+	var best_importance := unit_importance
+	for enemy in members:
+		if enemy == self or not enemy is Node2D:
+			continue
+
+		var importance := 0
+		if enemy.has_method("get_unit_importance"):
+			importance = int(enemy.call("get_unit_importance"))
+		var archetype := EnemyArchetype.LIGHT_MELEE
+		if enemy.has_method("get_ai_archetype"):
+			archetype = int(enemy.call("get_ai_archetype"))
+		if archetype == EnemyArchetype.SUPPORT:
+			importance += 3
+		if importance <= best_importance:
+			continue
+
+		best_importance = importance
+		best_target = enemy
+
+	return best_target
 
 
 func _update_shoot_state(delta: float) -> void:
@@ -720,27 +976,69 @@ func _build_search_probe_plan() -> void:
 
 
 func _get_debug_state_text() -> String:
+	var state_text := ""
 	match _shoot_state:
 		ShootState.TRACKING:
-			return "TRACK"
+			state_text = "TRACK"
 		ShootState.WINDUP:
-			return "LOCK"
+			state_text = "LOCK"
 		ShootState.RECOVERY:
-			return "RECOVER"
+			state_text = "RECOVER"
 
-	if _is_target_visible():
-		return "READY"
-	if _can_see_target() and _awareness_state != AwarenessState.COMBAT:
-		return "DETECT"
-	if _awareness_state == AwarenessState.SUSPICIOUS:
-		return "SUSPECT"
-	if _is_investigating_last_seen:
-		return "INVEST"
-	if _awareness_state == AwarenessState.INVESTIGATE:
-		return "INVEST"
-	if _has_last_seen_target:
-		return "SEARCH"
-	return "IDLE"
+	if state_text == "":
+		if _is_target_visible():
+			state_text = "READY"
+		elif _can_see_target() and _awareness_state != AwarenessState.COMBAT:
+			state_text = "DETECT"
+		elif _awareness_state == AwarenessState.SUSPICIOUS:
+			state_text = "SUSPECT"
+		elif _is_investigating_last_seen:
+			state_text = "INVEST"
+		elif _awareness_state == AwarenessState.INVESTIGATE:
+			state_text = "INVEST"
+		elif _has_last_seen_target:
+			state_text = "SEARCH"
+		else:
+			state_text = "IDLE"
+
+	if _has_last_seen_target and _current_group_role != GroupTacticRole.NONE:
+		return "%s/%s/%s" % [state_text, _get_group_role_code(_current_group_role), _get_personality_code()]
+
+	return "%s/%s" % [state_text, _get_personality_code()]
+
+
+func _get_group_role_code(role: int) -> String:
+	match role:
+		GroupTacticRole.DIRECT:
+			return "DIR"
+		GroupTacticRole.LEFT_FLANK:
+			return "L-FLK"
+		GroupTacticRole.RIGHT_FLANK:
+			return "R-FLK"
+		GroupTacticRole.REAR_PRESSURE:
+			return "REAR"
+		GroupTacticRole.SUPPRESS:
+			return "SUP"
+		GroupTacticRole.GUARD:
+			return "GRD"
+
+	return "NONE"
+
+
+func _get_personality_code() -> String:
+	match ai_personality:
+		EnemyPersonality.BRAVE:
+			return "BRV"
+		EnemyPersonality.CAUTIOUS:
+			return "CAU"
+		EnemyPersonality.COWARDLY:
+			return "COW"
+		EnemyPersonality.PROTECTIVE:
+			return "PRT"
+		EnemyPersonality.SELFISH:
+			return "SLF"
+
+	return "BAL"
 
 
 func _update_debug_label() -> void:
@@ -958,6 +1256,7 @@ func _clear_target_awareness() -> void:
 	_search_probe_index = 0
 	_has_search_probe_plan = false
 	_is_search_probe_target = false
+	_current_group_role = GroupTacticRole.NONE
 	_clearing_scan_directions.clear()
 	_clearing_scan_index = 0
 	_clearing_scan_step_timer = 0.0
