@@ -57,6 +57,13 @@ enum LostTargetDecision {
 	REGROUP,
 }
 
+enum CoverActionState {
+	NONE,
+	MOVING,
+	HIDE,
+	PEEK,
+}
+
 @export var target_path: NodePath = NodePath("../../Player")
 @export var projectile_scene: PackedScene
 @export var corpse_container_scene: PackedScene
@@ -125,6 +132,11 @@ enum LostTargetDecision {
 @export var cover_shape_radius: float = 16.0
 @export var cover_min_threat_distance: float = 130.0
 @export var cover_adjacency_distance: float = 64.0
+@export var cover_hide_offset: float = 34.0
+@export var cover_peek_hold_time_min: float = 0.75
+@export var cover_peek_hold_time_max: float = 1.35
+@export var cover_hide_hold_time_min: float = 0.45
+@export var cover_hide_hold_time_max: float = 1.0
 @export var lost_target_tactics_enabled: bool = true
 @export var lost_target_advantage_threshold: float = 18.0
 @export var lost_target_disadvantage_threshold: float = -18.0
@@ -207,6 +219,10 @@ var _is_fallback_active: bool = false
 var _cover_target_position: Vector2 = Vector2.INF
 var _cover_repath_timer: float = 0.0
 var _is_using_cover: bool = false
+var _cover_action_state: int = CoverActionState.NONE
+var _cover_action_timer: float = 0.0
+var _cover_peek_position: Vector2 = Vector2.INF
+var _cover_hide_position: Vector2 = Vector2.INF
 var _lost_target_decision: int = LostTargetDecision.NONE
 var _lost_target_advantage_score: float = 0.0
 var _tactical_ammo_remaining: int = 0
@@ -251,6 +267,7 @@ func _physics_process(delta: float) -> void:
 	_update_visual_tracking(delta)
 	_update_shoot_state(delta)
 	_cover_repath_timer = maxf(_cover_repath_timer - delta, 0.0)
+	_cover_action_timer = maxf(_cover_action_timer - delta, 0.0)
 	_update_velocity(delta)
 	_apply_enemy_separation_velocity()
 	_apply_enemy_local_avoidance_velocity(delta)
@@ -297,11 +314,12 @@ func _update_velocity(delta: float) -> void:
 
 	var visible_target := _is_target_visible()
 	var target_position := _target.global_position if visible_target else _last_seen_target_position
-	if not visible_target and _apply_lost_target_decision_velocity(target_position, delta):
+	var maintaining_cover := _cover_action_state != CoverActionState.NONE and _cover_target_position != Vector2.INF
+	if not visible_target and not maintaining_cover and _apply_lost_target_decision_velocity(target_position, delta):
 		return
 
 	var movement_position := _get_group_pursuit_position(target_position)
-	var cover_position := _get_cover_movement_position(target_position, visible_target, movement_position)
+	var cover_position := _get_cover_movement_position(target_position, visible_target or maintaining_cover, movement_position)
 	if cover_position != Vector2.INF:
 		_move_toward_cover(cover_position, target_position)
 		return
@@ -433,20 +451,22 @@ func _get_cover_movement_position(threat_position: Vector2, visible_target: bool
 		return Vector2.INF
 	if _is_valid_cover_position(_cover_target_position, threat_position):
 		_is_using_cover = true
-		return _cover_target_position
+		_update_cover_action_state(threat_position)
+		return _get_active_cover_action_position()
 	if _cover_repath_timer > 0.0:
 		return Vector2.INF
 
 	_cover_repath_timer = cover_repath_interval
 	_cover_target_position = _find_cover_position(threat_position, movement_position)
+	_configure_cover_action_positions(threat_position)
 	_is_using_cover = _cover_target_position != Vector2.INF
-	return _cover_target_position
+	return _get_active_cover_action_position()
 
 
 func _should_seek_cover(threat_position: Vector2, visible_target: bool) -> bool:
 	if not cover_usage_enabled or not visible_target:
 		return false
-	if _shoot_state == ShootState.WINDUP:
+	if _shoot_state == ShootState.WINDUP and _cover_action_state == CoverActionState.NONE:
 		return false
 	if ai_archetype == EnemyArchetype.LIGHT_MELEE or ai_archetype == EnemyArchetype.BEAST:
 		return false
@@ -625,6 +645,105 @@ func _move_toward_cover(cover_position: Vector2, threat_position: Vector2) -> vo
 func _clear_cover_target() -> void:
 	_cover_target_position = Vector2.INF
 	_is_using_cover = false
+	_cover_action_state = CoverActionState.NONE
+	_cover_action_timer = 0.0
+	_cover_peek_position = Vector2.INF
+	_cover_hide_position = Vector2.INF
+
+
+func _configure_cover_action_positions(threat_position: Vector2) -> void:
+	if _cover_target_position == Vector2.INF:
+		_clear_cover_target()
+		return
+
+	_cover_peek_position = _cover_target_position
+	_cover_hide_position = _find_cover_hide_position(_cover_peek_position, threat_position)
+	_cover_action_state = CoverActionState.MOVING
+	_cover_action_timer = 0.0
+
+
+func _update_cover_action_state(threat_position: Vector2) -> void:
+	if _cover_target_position == Vector2.INF:
+		_clear_cover_target()
+		return
+	if _cover_peek_position == Vector2.INF:
+		_configure_cover_action_positions(threat_position)
+
+	if _cover_hide_position == Vector2.INF or _has_clear_line_between(_cover_hide_position, threat_position):
+		_cover_hide_position = _find_cover_hide_position(_cover_peek_position, threat_position)
+
+	match _cover_action_state:
+		CoverActionState.NONE:
+			_cover_action_state = CoverActionState.MOVING
+		CoverActionState.MOVING:
+			if global_position.distance_squared_to(_cover_peek_position) <= cover_arrival_distance * cover_arrival_distance:
+				_enter_cover_hide()
+		CoverActionState.HIDE:
+			if _cover_action_timer <= 0.0:
+				_enter_cover_peek()
+		CoverActionState.PEEK:
+			if _cover_action_timer <= 0.0 and _shoot_state != ShootState.TRACKING and _shoot_state != ShootState.WINDUP:
+				_enter_cover_hide()
+
+
+func _get_active_cover_action_position() -> Vector2:
+	match _cover_action_state:
+		CoverActionState.HIDE:
+			if _cover_hide_position != Vector2.INF:
+				return _cover_hide_position
+		CoverActionState.PEEK:
+			if _cover_peek_position != Vector2.INF:
+				return _cover_peek_position
+
+	return _cover_target_position
+
+
+func _enter_cover_hide() -> void:
+	_cover_action_state = CoverActionState.HIDE
+	var min_time := minf(cover_hide_hold_time_min, cover_hide_hold_time_max)
+	var max_time := maxf(cover_hide_hold_time_min, cover_hide_hold_time_max)
+	_cover_action_timer = randf_range(min_time, max_time)
+	if _shoot_state == ShootState.TRACKING:
+		_enter_search()
+
+
+func _enter_cover_peek() -> void:
+	_cover_action_state = CoverActionState.PEEK
+	var min_time := minf(cover_peek_hold_time_min, cover_peek_hold_time_max)
+	var max_time := maxf(cover_peek_hold_time_min, cover_peek_hold_time_max)
+	_cover_action_timer = randf_range(min_time, max_time)
+
+
+func _find_cover_hide_position(peek_position: Vector2, threat_position: Vector2) -> Vector2:
+	var away_from_threat := peek_position - threat_position
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = peek_position - global_position
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = _facing_direction
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = Vector2.RIGHT
+
+	var away := away_from_threat.normalized()
+	var side := Vector2(-away.y, away.x)
+	var candidate_offsets := [
+		away,
+		(away + side * 0.55).normalized(),
+		(away - side * 0.55).normalized(),
+		side,
+		-side,
+	]
+	for direction in candidate_offsets:
+		if direction.length_squared() <= 0.01:
+			continue
+
+		var candidate := peek_position + direction.normalized() * cover_hide_offset
+		if not _is_position_clear(candidate):
+			continue
+		if _has_clear_line_between(candidate, threat_position):
+			continue
+		return candidate
+
+	return peek_position
 
 
 func _enter_lost_target_search() -> void:
@@ -1489,6 +1608,8 @@ func _set_aim_direction(direction: Vector2) -> void:
 
 
 func _can_shoot_target() -> bool:
+	if _cover_action_state == CoverActionState.HIDE:
+		return false
 	return _is_target_visible()
 
 
@@ -1526,6 +1647,11 @@ func _update_target_awareness(delta: float) -> void:
 		_last_seen_target_position = _get_predicted_pursuit_position(tracked_position)
 		_awareness_timer = maxf(_awareness_timer, post_combat_search_memory_time)
 		_is_investigating_last_seen = false
+		_hide_last_seen_marker()
+		return
+
+	if _awareness_state == AwarenessState.COMBAT and _cover_action_state == CoverActionState.HIDE:
+		_awareness_timer = maxf(_awareness_timer, search_memory_time)
 		_hide_last_seen_marker()
 		return
 
@@ -1734,6 +1860,11 @@ func _get_debug_state_text() -> String:
 			state_text = "LOCK"
 		ShootState.RECOVERY:
 			state_text = "RECOVER"
+
+	if _cover_action_state == CoverActionState.HIDE:
+		state_text = "HIDE"
+	elif _cover_action_state == CoverActionState.PEEK and state_text == "":
+		state_text = "PEEK"
 
 	if state_text == "":
 		if _is_blocked_by_enemy:
