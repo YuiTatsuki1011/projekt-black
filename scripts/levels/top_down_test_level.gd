@@ -5,6 +5,11 @@ const TOP_DOWN_ENEMY_GROUP := "top_down_enemies"
 const NOISE_RIPPLE_SCRIPT := preload("res://scripts/perception/noise_ripple.gd")
 const STEALTH_VIGNETTE_SCRIPT := preload("res://scripts/ui/stealth_vignette_overlay.gd")
 
+enum MissionObjectiveType {
+	INTERACT,
+	ELIMINATION,
+}
+
 @export var navigation_inner_margin: float = 24.0
 @export var navigation_obstacle_margin: float = 12.0
 @export var navigation_cell_size: float = 20.0
@@ -16,9 +21,12 @@ const STEALTH_VIGNETTE_SCRIPT := preload("res://scripts/ui/stealth_vignette_over
 @export var stealth_vignette_edge_fraction: float = 0.18
 @export var stealth_vignette_min_thickness: float = 128.0
 @export var stealth_vignette_steps: int = 40
+@export_enum("Interact", "Elimination") var mission_objective_type: int = MissionObjectiveType.ELIMINATION
 @export var mission_objective_id: StringName = &"prototype_cache"
-@export var mission_objective_text: String = "Recover the data cache"
+@export var mission_objective_text: String = "Eliminate the marked gunner"
 @export var mission_extract_text: String = "Reach extraction"
+@export var mission_elimination_target_id: StringName = &"mission_gunner"
+@export var mission_required_kills: int = 1
 
 var _enemy_debug_vision_toggle_was_pressed: bool = false
 var _debug_noise_toggle_was_pressed: bool = false
@@ -29,6 +37,7 @@ var _mission_hud: MissionStatusHud
 var _extraction_point: Node
 var _mission_objective_complete: bool = false
 var _mission_complete: bool = false
+var _mission_kill_count: int = 0
 
 
 func _ready() -> void:
@@ -89,6 +98,9 @@ func emit_noise_event(
 func complete_mission_objective(objective_id: StringName, _source: Node = null) -> bool:
 	if _mission_complete:
 		return false
+	if mission_objective_type != MissionObjectiveType.INTERACT:
+		show_mission_message("Objective requires elimination.")
+		return false
 	if objective_id != mission_objective_id:
 		show_mission_message("Unknown objective.")
 		return false
@@ -100,6 +112,23 @@ func complete_mission_objective(objective_id: StringName, _source: Node = null) 
 	show_mission_message("Objective secured. Extraction available.")
 	_update_mission_display()
 	return true
+
+
+func notify_mission_enemy_defeated(target_id: StringName, count: int = 1, _source: Node = null) -> void:
+	if _mission_complete or _mission_objective_complete:
+		return
+	if mission_objective_type != MissionObjectiveType.ELIMINATION:
+		return
+	if target_id != mission_elimination_target_id:
+		return
+
+	_mission_kill_count = mini(_mission_kill_count + maxi(count, 1), maxi(mission_required_kills, 1))
+	if _mission_kill_count >= maxi(mission_required_kills, 1):
+		_mission_objective_complete = true
+		show_mission_message("Target eliminated. Extraction available.")
+	else:
+		show_mission_message("Target eliminated. %d/%d" % [_mission_kill_count, mission_required_kills])
+	_update_mission_display()
 
 
 func request_extraction(_source: Node = null) -> bool:
@@ -129,6 +158,13 @@ func _update_mission_display() -> void:
 		elif _mission_objective_complete:
 			_mission_hud.set_objective_text("OBJECTIVE: %s" % mission_extract_text.to_upper())
 			_mission_hud.set_status_text("RETURN TO EXTRACTION")
+		elif mission_objective_type == MissionObjectiveType.ELIMINATION:
+			_mission_hud.set_objective_text("OBJECTIVE: %s %d/%d" % [
+				mission_objective_text.to_upper(),
+				_mission_kill_count,
+				maxi(mission_required_kills, 1),
+			])
+			_mission_hud.set_status_text("TARGET ACTIVE")
 		else:
 			_mission_hud.set_objective_text("OBJECTIVE: %s" % mission_objective_text.to_upper())
 			_mission_hud.set_status_text("IN PROGRESS")

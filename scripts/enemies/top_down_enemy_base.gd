@@ -44,6 +44,9 @@ enum AwarenessState {
 @export var knockback_strength: float = 120.0
 @export var knockback_recovery: float = 480.0
 @export var hit_flash_time: float = 0.08
+@export var mission_target_id: StringName = &""
+@export var mission_target_label: String = ""
+@export var mission_target_weight: int = 1
 
 @onready var health: Node = get_node_or_null("Health")
 @onready var body_visual: Polygon2D = get_node_or_null("BodyVisual") as Polygon2D
@@ -72,6 +75,7 @@ var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
 var _detection_bar_fill: Line2D
+var _mission_target_marker: Label
 
 
 func _ready() -> void:
@@ -86,6 +90,7 @@ func _ready() -> void:
 	_configure_debug_label()
 	_configure_vision_cone()
 	_configure_detection_bar()
+	_configure_mission_target_marker()
 	_connect_health_signals()
 	_enemy_ready()
 
@@ -303,6 +308,20 @@ func _configure_detection_bar() -> void:
 	_detection_bar_fill.width = 3.0
 	_detection_bar_fill.default_color = Color(1.0, 0.75, 0.16, 0.95)
 	_detection_bar_root.add_child(_detection_bar_fill)
+
+
+func _configure_mission_target_marker() -> void:
+	if mission_target_id == &"":
+		return
+
+	_mission_target_marker = Label.new()
+	_mission_target_marker.name = "MissionTargetMarker"
+	_mission_target_marker.position = Vector2(-32.0, -58.0)
+	_mission_target_marker.z_index = 22
+	_mission_target_marker.text = mission_target_label if not mission_target_label.is_empty() else "TARGET"
+	_mission_target_marker.add_theme_font_size_override("font_size", 10)
+	_mission_target_marker.add_theme_color_override("font_color", Color(1.0, 0.68, 0.2, 0.95))
+	add_child(_mission_target_marker)
 
 
 func _update_awareness(delta: float) -> void:
@@ -691,10 +710,20 @@ func _on_died() -> void:
 	_is_dead = true
 	collision_layer = 0
 	collision_mask = 0
+	_notify_mission_enemy_defeated()
 	_enemy_died()
 	_spawn_vfx(death_vfx_scene, global_position)
 	_spawn_loot_container()
 	queue_free()
+
+
+func _notify_mission_enemy_defeated() -> void:
+	if mission_target_id == &"":
+		return
+
+	var current_scene := get_tree().current_scene
+	if current_scene != null and current_scene.has_method("notify_mission_enemy_defeated"):
+		current_scene.call("notify_mission_enemy_defeated", mission_target_id, maxi(mission_target_weight, 1), self)
 
 
 func _enemy_died() -> void:

@@ -14,3 +14,14 @@
 - This is a prototype loop only.
 - There is no reward screen, save persistence, result summary, extraction timer, or item-based objective validation yet.
 - The next useful step is deciding whether objectives should be interact-based, item-based, kill-based, or mixed.
+
+## 2026-06-04: Elimination Objective Prototype
+
+- `TopDownEnemyBase` now supports mission target metadata:
+  - `mission_target_id`
+  - `mission_target_label`
+  - `mission_target_weight`
+- Mission-target enemies notify the current level through `notify_mission_enemy_defeated(...)` when they die.
+- `TopDownTestLevel` now supports `MissionObjectiveType.ELIMINATION`.
+- The test level starts with a marked `MissionGunner` target. Killing it completes the objective and unlocks extraction.
+- The old interact objective scene still exists for future mixed-objective tests, but it is no longer placed in the current top-down test level.

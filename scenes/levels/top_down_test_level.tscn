@@ -1,4 +1,4 @@
-[gd_scene load_steps=22 format=3]
+[gd_scene load_steps=21 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
@@ -14,7 +14,6 @@
 [ext_resource type="PackedScene" path="res://scenes/enemies/top_down_ranged_enemy.tscn" id="12_top_down_ranged"]
 [ext_resource type="Script" path="res://scripts/levels/top_down_test_level.gd" id="13_top_down_level"]
 [ext_resource type="PackedScene" path="res://scenes/ui/mission_status_hud.tscn" id="14_mission_hud"]
-[ext_resource type="PackedScene" path="res://scenes/interaction/mission_objective.tscn" id="15_mission_objective"]
 [ext_resource type="PackedScene" path="res://scenes/interaction/extraction_point.tscn" id="16_extraction_point"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_horizontal_wall"]
@@ -164,6 +163,11 @@ walk_speed = 208.0
 
 [node name="Enemies" type="Node2D" parent="."]
 
+[node name="MissionGunner" parent="Enemies" instance=ExtResource("12_top_down_ranged")]
+position = Vector2(805, 520)
+mission_target_id = &"mission_gunner"
+mission_target_label = "BOUNTY"
+
 [node name="TargetButton" parent="." instance=ExtResource("7_spawn_button")]
 position = Vector2(162, 142)
 spawn_scene = ExtResource("8_training_target")
@@ -195,9 +199,6 @@ spawn_offset = Vector2(255, 18)
 [node name="LootBox" parent="." instance=ExtResource("10_item_container")]
 position = Vector2(900, 170)
 container_label = "LOOT BOX"
-
-[node name="MissionObjective" parent="." instance=ExtResource("15_mission_objective")]
-position = Vector2(820, 520)
 
 [node name="ExtractionPoint" parent="." instance=ExtResource("16_extraction_point")]
 position = Vector2(92, 548)
