@@ -48,6 +48,15 @@ enum GroupTacticRole {
 	FALLBACK,
 }
 
+enum LostTargetDecision {
+	NONE,
+	AGGRESSIVE_SEARCH,
+	CAUTIOUS_SEARCH,
+	FIGHTING_RETREAT,
+	PANIC_FLEE,
+	REGROUP,
+}
+
 @export var target_path: NodePath = NodePath("../../Player")
 @export var projectile_scene: PackedScene
 @export var corpse_container_scene: PackedScene
@@ -116,6 +125,20 @@ enum GroupTacticRole {
 @export var cover_shape_radius: float = 16.0
 @export var cover_min_threat_distance: float = 130.0
 @export var cover_adjacency_distance: float = 64.0
+@export var lost_target_tactics_enabled: bool = true
+@export var lost_target_advantage_threshold: float = 18.0
+@export var lost_target_disadvantage_threshold: float = -18.0
+@export var aggressive_search_memory_multiplier: float = 1.8
+@export var cautious_search_memory_multiplier: float = 1.25
+@export var retreat_search_memory_multiplier: float = 1.15
+@export var aggressive_search_speed_multiplier: float = 1.12
+@export var cautious_search_speed_multiplier: float = 0.76
+@export var fighting_retreat_speed_multiplier: float = 0.92
+@export var panic_flee_speed_multiplier: float = 1.18
+@export var lost_target_retreat_distance: float = 230.0
+@export var lost_target_regroup_range: float = 360.0
+@export var tactical_ammo_capacity: int = 8
+@export var tactical_low_ammo_threshold: int = 2
 @export var debug_vision_visible: bool = true
 @export var debug_vision_focus_distance: float = 440.0
 @export var debug_vision_segments: int = 24
@@ -178,6 +201,9 @@ var _is_fallback_active: bool = false
 var _cover_target_position: Vector2 = Vector2.INF
 var _cover_repath_timer: float = 0.0
 var _is_using_cover: bool = false
+var _lost_target_decision: int = LostTargetDecision.NONE
+var _lost_target_advantage_score: float = 0.0
+var _tactical_ammo_remaining: int = 0
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -195,6 +221,7 @@ func _ready() -> void:
 	_configure_detection_bar()
 	health.damaged.connect(_on_damaged)
 	health.died.connect(_on_died)
+	_tactical_ammo_remaining = tactical_ammo_capacity
 	_shot_timer = initial_shot_delay
 	_set_telegraph_visible(false)
 
@@ -259,6 +286,9 @@ func _update_velocity(delta: float) -> void:
 
 	var visible_target := _is_target_visible()
 	var target_position := _target.global_position if visible_target else _last_seen_target_position
+	if not visible_target and _apply_lost_target_decision_velocity(target_position, delta):
+		return
+
 	var movement_position := _get_group_pursuit_position(target_position)
 	var cover_position := _get_cover_movement_position(target_position, visible_target, movement_position)
 	if cover_position != Vector2.INF:
@@ -277,7 +307,7 @@ func _update_velocity(delta: float) -> void:
 		velocity += _get_navigation_direction_to(movement_position, target_direction) * move_speed
 	elif not visible_target and target_distance > 24.0:
 		var move_direction := _get_navigation_direction_to(movement_position, target_direction)
-		velocity += move_direction * move_speed
+		velocity += move_direction * move_speed * _get_lost_target_search_speed_multiplier()
 		if _has_line_of_sight_to_position(movement_position):
 			_set_aim_direction(target_direction)
 		else:
@@ -584,6 +614,257 @@ func _move_toward_cover(cover_position: Vector2, threat_position: Vector2) -> vo
 func _clear_cover_target() -> void:
 	_cover_target_position = Vector2.INF
 	_is_using_cover = false
+
+
+func _enter_lost_target_search() -> void:
+	_awareness_state = AwarenessState.SEARCH
+	_detection_progress = 0.0
+	_combat_peripheral_tracking_timer = 0.0
+	_is_post_combat_search = true
+	_is_search_probe_target = false
+	_has_search_probe_plan = false
+	_search_probe_points.clear()
+	_search_probe_index = 0
+	_choose_lost_target_decision()
+
+	var memory_time := post_combat_search_memory_time
+	match _lost_target_decision:
+		LostTargetDecision.AGGRESSIVE_SEARCH:
+			memory_time *= aggressive_search_memory_multiplier
+		LostTargetDecision.CAUTIOUS_SEARCH:
+			memory_time *= cautious_search_memory_multiplier
+		LostTargetDecision.FIGHTING_RETREAT, LostTargetDecision.PANIC_FLEE, LostTargetDecision.REGROUP:
+			memory_time *= retreat_search_memory_multiplier
+
+	_awareness_timer = maxf(_awareness_timer, memory_time)
+
+
+func _choose_lost_target_decision() -> void:
+	if not lost_target_tactics_enabled:
+		_lost_target_decision = LostTargetDecision.AGGRESSIVE_SEARCH
+		_lost_target_advantage_score = 0.0
+		return
+
+	_lost_target_advantage_score = _get_combat_advantage_score()
+	if _lost_target_advantage_score >= lost_target_advantage_threshold:
+		if ai_personality == EnemyPersonality.CAUTIOUS and _get_health_ratio() < 0.7:
+			_lost_target_decision = LostTargetDecision.CAUTIOUS_SEARCH
+		else:
+			_lost_target_decision = LostTargetDecision.AGGRESSIVE_SEARCH
+		return
+
+	if _lost_target_advantage_score <= lost_target_disadvantage_threshold:
+		if _should_panic_flee():
+			_lost_target_decision = LostTargetDecision.PANIC_FLEE
+		elif _get_regroup_position() != Vector2.INF:
+			_lost_target_decision = LostTargetDecision.REGROUP
+		else:
+			_lost_target_decision = LostTargetDecision.FIGHTING_RETREAT
+		return
+
+	if ai_personality == EnemyPersonality.BRAVE or ai_archetype == EnemyArchetype.HEAVY_ASSAULT:
+		_lost_target_decision = LostTargetDecision.AGGRESSIVE_SEARCH
+	elif ai_personality == EnemyPersonality.COWARDLY and _get_regroup_position() != Vector2.INF:
+		_lost_target_decision = LostTargetDecision.REGROUP
+	else:
+		_lost_target_decision = LostTargetDecision.CAUTIOUS_SEARCH
+
+
+func _get_combat_advantage_score() -> float:
+	var score := 0.0
+	var health_ratio := _get_health_ratio()
+	score += (health_ratio - 0.5) * 78.0
+	score += (_get_target_vulnerability_score() - 0.5) * 52.0
+	score += (_get_morale_score() - 50.0) * 0.35
+
+	var allies := maxi(_get_active_group_members().size() - 1, 0)
+	score += minf(float(allies), 3.0) * 13.0
+	if allies <= 0:
+		score -= 6.0
+
+	score -= _get_tactical_ammo_pressure() * 24.0
+	score -= self_preservation * 7.0
+	match ai_personality:
+		EnemyPersonality.BRAVE:
+			score += 18.0
+		EnemyPersonality.CAUTIOUS:
+			score -= 4.0
+		EnemyPersonality.COWARDLY:
+			score -= 22.0
+		EnemyPersonality.PROTECTIVE:
+			if allies > 0:
+				score += 8.0
+			else:
+				score -= 5.0
+		EnemyPersonality.SELFISH:
+			if health_ratio < 0.5:
+				score -= 10.0
+			else:
+				score += 4.0
+
+	match ai_archetype:
+		EnemyArchetype.HEAVY_ASSAULT:
+			score += 15.0
+		EnemyArchetype.BEAST:
+			score += 8.0
+		EnemyArchetype.SUPPORT:
+			score -= 12.0
+		EnemyArchetype.LIGHT_FIREARM:
+			if allies > 0:
+				score += 4.0
+
+	return score
+
+
+func _get_target_vulnerability_score() -> float:
+	if _target == null or not is_instance_valid(_target):
+		return 0.5
+
+	var target_health := _target.get_node_or_null("Health")
+	if target_health == null:
+		return 0.5
+
+	var max_health_value := int(target_health.get("max_health"))
+	if max_health_value <= 0:
+		return 0.5
+
+	var current_health_value := int(target_health.get("current_health"))
+	var target_health_ratio := clampf(float(current_health_value) / float(max_health_value), 0.0, 1.0)
+	return 1.0 - target_health_ratio
+
+
+func _get_tactical_ammo_pressure() -> float:
+	if tactical_ammo_capacity <= 0:
+		return 0.0
+
+	return 1.0 - clampf(float(_tactical_ammo_remaining) / float(tactical_ammo_capacity), 0.0, 1.0)
+
+
+func _should_panic_flee() -> bool:
+	if ai_archetype == EnemyArchetype.BEAST:
+		return false
+	if ai_personality == EnemyPersonality.BRAVE:
+		return false
+	if ai_personality == EnemyPersonality.COWARDLY:
+		return true
+	if _get_health_ratio() <= 0.28:
+		return true
+	if tactical_ammo_capacity > 0 and _tactical_ammo_remaining <= tactical_low_ammo_threshold:
+		return ai_personality != EnemyPersonality.CAUTIOUS
+
+	return _lost_target_advantage_score <= lost_target_disadvantage_threshold - 20.0
+
+
+func _apply_lost_target_decision_velocity(threat_position: Vector2, delta: float) -> bool:
+	if _lost_target_decision == LostTargetDecision.NONE:
+		return false
+
+	match _lost_target_decision:
+		LostTargetDecision.FIGHTING_RETREAT:
+			_apply_fighting_retreat_velocity(threat_position, delta)
+			return true
+		LostTargetDecision.PANIC_FLEE:
+			_apply_panic_flee_velocity(threat_position)
+			return true
+		LostTargetDecision.REGROUP:
+			if _apply_regroup_velocity(threat_position, delta):
+				return true
+			_apply_fighting_retreat_velocity(threat_position, delta)
+			return true
+
+	return false
+
+
+func _apply_fighting_retreat_velocity(threat_position: Vector2, delta: float) -> void:
+	var away_from_threat := global_position - threat_position
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = -_facing_direction
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = Vector2.RIGHT
+
+	var retreat_direction := away_from_threat.normalized()
+	var retreat_position := global_position + retreat_direction * lost_target_retreat_distance
+	var move_direction := _get_navigation_direction_to(retreat_position, retreat_direction)
+	velocity += move_direction * move_speed * fighting_retreat_speed_multiplier
+
+	var to_threat := threat_position - global_position
+	if to_threat.length_squared() > 0.01:
+		_turn_aim_toward(to_threat.normalized(), delta)
+
+
+func _apply_panic_flee_velocity(threat_position: Vector2) -> void:
+	var away_from_threat := global_position - threat_position
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = -_facing_direction
+	if away_from_threat.length_squared() <= 0.01:
+		away_from_threat = Vector2.RIGHT
+
+	var flee_direction := away_from_threat.normalized()
+	var flee_position := global_position + flee_direction * lost_target_retreat_distance
+	velocity += _get_navigation_direction_to(flee_position, flee_direction) * move_speed * panic_flee_speed_multiplier
+	_set_aim_direction(flee_direction)
+
+
+func _apply_regroup_velocity(threat_position: Vector2, delta: float) -> bool:
+	var regroup_position := _get_regroup_position()
+	if regroup_position == Vector2.INF:
+		return false
+
+	var to_regroup := regroup_position - global_position
+	if to_regroup.length_squared() > 18.0 * 18.0:
+		var fallback_direction := to_regroup.normalized()
+		velocity += _get_navigation_direction_to(regroup_position, fallback_direction) * move_speed * cautious_search_speed_multiplier
+
+	var to_threat := threat_position - global_position
+	if to_threat.length_squared() > 0.01:
+		_turn_aim_toward(to_threat.normalized(), delta)
+	return true
+
+
+func _get_regroup_position() -> Vector2:
+	var best_position := Vector2.INF
+	var best_score := -INF
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy == self or enemy == null or not is_instance_valid(enemy):
+			continue
+		if not enemy is Node2D:
+			continue
+
+		var enemy_2d := enemy as Node2D
+		var distance := global_position.distance_to(enemy_2d.global_position)
+		if distance > lost_target_regroup_range:
+			continue
+
+		var score := -distance
+		if enemy.has_method("has_active_player_sighting") and bool(enemy.call("has_active_player_sighting")):
+			score += 80.0
+		if enemy.has_method("get_unit_importance"):
+			score += float(enemy.call("get_unit_importance")) * 6.0
+		if score > best_score:
+			best_score = score
+			best_position = enemy_2d.global_position
+
+	return best_position
+
+
+func _get_lost_target_search_speed_multiplier() -> float:
+	match _lost_target_decision:
+		LostTargetDecision.AGGRESSIVE_SEARCH:
+			return aggressive_search_speed_multiplier
+		LostTargetDecision.CAUTIOUS_SEARCH:
+			return cautious_search_speed_multiplier
+
+	return 1.0
+
+
+func _get_lost_target_probe_radius_multiplier() -> float:
+	match _lost_target_decision:
+		LostTargetDecision.AGGRESSIVE_SEARCH:
+			return 1.35
+		LostTargetDecision.CAUTIOUS_SEARCH:
+			return 0.82
+
+	return 1.0
 
 
 func _apply_fallback_velocity() -> void:
@@ -1022,6 +1303,9 @@ func _fire_locked_shot() -> void:
 	if projectile_scene == null:
 		return
 
+	if tactical_ammo_capacity > 0:
+		_tactical_ammo_remaining = maxi(_tactical_ammo_remaining - 1, 0)
+
 	var projectile := projectile_scene.instantiate()
 	var projectile_parent := get_tree().current_scene
 	if projectile_parent == null:
@@ -1119,15 +1403,7 @@ func _update_target_awareness(delta: float) -> void:
 		return
 
 	if _awareness_state == AwarenessState.COMBAT:
-		_awareness_state = AwarenessState.SEARCH
-		_detection_progress = 0.0
-		_combat_peripheral_tracking_timer = 0.0
-		_is_post_combat_search = true
-		_is_search_probe_target = false
-		_has_search_probe_plan = false
-		_search_probe_points.clear()
-		_search_probe_index = 0
-		_awareness_timer = maxf(_awareness_timer, post_combat_search_memory_time)
+		_enter_lost_target_search()
 
 	_show_last_seen_marker_if_all_targets_lost(_last_seen_target_position)
 	if _awareness_state == AwarenessState.SUSPICIOUS:
@@ -1300,6 +1576,7 @@ func _advance_search_probe() -> bool:
 
 func _build_search_probe_plan() -> void:
 	var origin := _last_seen_target_position
+	var probe_radius := search_probe_radius * _get_lost_target_probe_radius_multiplier()
 	var base_direction := _estimated_target_velocity.normalized()
 	if base_direction.length_squared() <= 0.01:
 		base_direction = (_last_seen_target_position - global_position).normalized()
@@ -1311,11 +1588,11 @@ func _build_search_probe_plan() -> void:
 	var side_angle := deg_to_rad(65.0)
 	var back_angle := deg_to_rad(140.0)
 	_search_probe_points = [
-		origin + base_direction * search_probe_radius,
-		origin + base_direction.rotated(-side_angle) * search_probe_radius,
-		origin + base_direction.rotated(side_angle) * search_probe_radius,
-		origin + base_direction.rotated(-back_angle) * search_probe_radius * 0.7,
-		origin + base_direction.rotated(back_angle) * search_probe_radius * 0.7,
+		origin + base_direction * probe_radius,
+		origin + base_direction.rotated(-side_angle) * probe_radius,
+		origin + base_direction.rotated(side_angle) * probe_radius,
+		origin + base_direction.rotated(-back_angle) * probe_radius * 0.7,
+		origin + base_direction.rotated(back_angle) * probe_radius * 0.7,
 	]
 	_search_probe_index = 0
 	_has_search_probe_plan = true
@@ -1344,6 +1621,8 @@ func _get_debug_state_text() -> String:
 			state_text = "INVEST"
 		elif _awareness_state == AwarenessState.INVESTIGATE:
 			state_text = "INVEST"
+		elif _lost_target_decision != LostTargetDecision.NONE and _has_last_seen_target:
+			state_text = _get_lost_target_decision_code()
 		elif _has_last_seen_target:
 			state_text = "SEARCH"
 		else:
@@ -1398,6 +1677,22 @@ func _get_personality_code() -> String:
 
 func _get_morale_code() -> String:
 	return "M%02d" % int(roundf(_get_morale_score()))
+
+
+func _get_lost_target_decision_code() -> String:
+	match _lost_target_decision:
+		LostTargetDecision.AGGRESSIVE_SEARCH:
+			return "PUSH"
+		LostTargetDecision.CAUTIOUS_SEARCH:
+			return "CAUT"
+		LostTargetDecision.FIGHTING_RETREAT:
+			return "RET"
+		LostTargetDecision.PANIC_FLEE:
+			return "FLEE"
+		LostTargetDecision.REGROUP:
+			return "GROUP"
+
+	return "SEARCH"
 
 
 func _update_debug_label() -> void:
@@ -1531,6 +1826,7 @@ func _receive_target_stimulus(
 	_last_stimulus_type = stimulus_type
 	if is_direct_sighting:
 		_awareness_state = AwarenessState.COMBAT
+		_lost_target_decision = LostTargetDecision.NONE
 		_is_post_combat_search = false
 		_suspicious_timer = 0.0
 		_detection_progress = 1.0
@@ -1617,6 +1913,9 @@ func _clear_target_awareness() -> void:
 	_is_search_probe_target = false
 	_current_group_role = GroupTacticRole.NONE
 	_is_fallback_active = false
+	_lost_target_decision = LostTargetDecision.NONE
+	_lost_target_advantage_score = 0.0
+	_tactical_ammo_remaining = tactical_ammo_capacity
 	_clear_cover_target()
 	_clearing_scan_directions.clear()
 	_clearing_scan_index = 0
