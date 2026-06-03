@@ -8,10 +8,10 @@
 [ext_resource type="Script" path="res://scripts/enemies/loot_dropper.gd" id="6_loot_dropper"]
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_body"]
-radius = 16.0
+radius = 18.0
 
 [sub_resource type="CircleShape2D" id="CircleShape2D_damage"]
-radius = 26.0
+radius = 40.0
 
 [node name="TopDownChaserEnemy" type="CharacterBody2D"]
 collision_layer = 8

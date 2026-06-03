@@ -12,11 +12,13 @@ enum AttackState {
 @export var move_speed: float = 92.0
 @export var aggro_range: float = 520.0
 @export var attack_damage: int = 16
-@export var attack_range: float = 34.0
+@export var attack_range: float = 44.0
 @export var attack_windup_time: float = 0.28
 @export var attack_active_time: float = 0.16
 @export var attack_recovery_time: float = 0.55
 @export var attack_lunge_speed: float = 180.0
+@export var desired_target_separation: float = 36.0
+@export var separation_push_speed: float = 420.0
 @export var hit_vfx_scene: PackedScene
 @export var death_vfx_scene: PackedScene
 @export var knockback_strength: float = 130.0
@@ -64,6 +66,7 @@ func _physics_process(delta: float) -> void:
 	_update_velocity()
 	_knockback_velocity = _knockback_velocity.move_toward(Vector2.ZERO, knockback_recovery * delta)
 	move_and_slide()
+	_apply_target_separation(delta)
 
 
 func apply_hit_reaction(direction: Vector2, _damage: int, hit_position: Vector2) -> void:
@@ -90,14 +93,45 @@ func _update_velocity() -> void:
 	if _target == null:
 		return
 
+	var to_target := _target.global_position - global_position
+	var target_distance := to_target.length()
+	var target_direction := to_target / target_distance if target_distance > 0.01 else _attack_direction
+	_apply_separation_velocity(target_distance, target_direction)
+
 	match _attack_state:
 		AttackState.CHASE:
-			var to_target := _target.global_position - global_position
-			if to_target.length_squared() <= aggro_range * aggro_range and to_target.length_squared() > 1.0:
-				velocity += to_target.normalized() * move_speed
+			if target_distance <= aggro_range and target_distance > desired_target_separation:
+				velocity += target_direction * move_speed
 				_set_facing(to_target)
 		AttackState.ACTIVE:
-			velocity += _attack_direction * attack_lunge_speed
+			if target_distance > desired_target_separation:
+				velocity += _attack_direction * attack_lunge_speed
+
+
+func _apply_separation_velocity(target_distance: float, target_direction: Vector2) -> void:
+	if target_distance >= desired_target_separation:
+		return
+
+	var away_direction := -target_direction
+	if away_direction == Vector2.ZERO:
+		away_direction = -_attack_direction
+	var separation_ratio := (desired_target_separation - target_distance) / desired_target_separation
+	velocity += away_direction.normalized() * separation_push_speed * clampf(separation_ratio, 0.25, 1.0)
+
+
+func _apply_target_separation(delta: float) -> void:
+	if _target == null or not is_instance_valid(_target):
+		return
+
+	var to_target := _target.global_position - global_position
+	var target_distance := to_target.length()
+	if target_distance <= 0.01 or target_distance >= desired_target_separation:
+		return
+
+	var away_direction := (-to_target).normalized()
+	var separation_delta := desired_target_separation - target_distance
+	var max_push := separation_push_speed * delta
+	global_position += away_direction * minf(separation_delta, max_push)
 
 
 func _update_attack_state(delta: float) -> void:
