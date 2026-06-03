@@ -86,6 +86,10 @@ enum CoverActionState {
 @export var projectile_damage: int = 14
 @export var projectile_speed: float = 540.0
 @export var telegraph_length: float = 760.0
+@export var simple_ai_enabled: bool = true
+@export var simple_search_memory_time: float = 5.0
+@export var simple_search_scan_time: float = 2.0
+@export var simple_search_arrival_distance: float = 28.0
 @export var search_memory_time: float = 2.4
 @export var post_combat_search_memory_time: float = 10.0
 @export_flags_2d_physics var line_of_sight_blocker_mask: int = 1
@@ -287,7 +291,8 @@ func _physics_process(delta: float) -> void:
 	_cover_action_timer = maxf(_cover_action_timer - delta, 0.0)
 	_update_velocity(delta)
 	_apply_enemy_separation_velocity()
-	_apply_enemy_local_avoidance_velocity(delta)
+	if not simple_ai_enabled:
+		_apply_enemy_local_avoidance_velocity(delta)
 	_update_debug_label()
 	_update_debug_vision()
 	_update_detection_bar()
@@ -317,6 +322,10 @@ func _resolve_target() -> void:
 
 
 func _update_velocity(delta: float) -> void:
+	if simple_ai_enabled:
+		_update_simple_velocity(delta)
+		return
+
 	velocity = _knockback_velocity
 	_is_using_cover = false
 	if not _has_last_seen_target:
@@ -364,6 +373,39 @@ func _update_velocity(delta: float) -> void:
 			_set_aim_direction(target_direction)
 		else:
 			_turn_aim_toward(_get_corner_clearing_direction(move_direction, target_direction, delta), delta)
+
+
+func _update_simple_velocity(delta: float) -> void:
+	velocity = _knockback_velocity
+	_is_using_cover = false
+	_current_group_role = GroupTacticRole.NONE
+	_lost_target_squad_role = LostTargetSquadRole.NONE
+	_clear_cover_target()
+	if not _has_last_seen_target:
+		return
+	if _awareness_state == AwarenessState.SUSPICIOUS:
+		return
+	if _is_investigating_last_seen:
+		return
+
+	var visible_target := _is_target_visible()
+	var target_position := _target.global_position if visible_target else _last_seen_target_position
+	var to_target := target_position - global_position
+	var target_distance := to_target.length()
+	if target_distance <= 0.01:
+		return
+
+	var target_direction := to_target / target_distance
+	if visible_target:
+		if target_distance < retreat_range:
+			velocity -= target_direction * move_speed * 0.75
+		elif target_distance > preferred_range:
+			velocity += _get_navigation_direction_to(target_position, target_direction) * move_speed
+		_turn_aim_toward(target_direction, delta)
+	elif target_distance > simple_search_arrival_distance:
+		var move_direction := _get_navigation_direction_to(target_position, target_direction)
+		velocity += move_direction * move_speed * 0.9
+		_turn_aim_toward(_get_corner_clearing_direction(move_direction, target_direction, delta), delta)
 
 
 func _configure_navigation_agent() -> void:
@@ -1766,6 +1808,10 @@ func _can_shoot_target() -> bool:
 
 
 func _update_target_awareness(delta: float) -> void:
+	if simple_ai_enabled:
+		_update_simple_target_awareness(delta)
+		return
+
 	if _target == null or not is_instance_valid(_target):
 		_clear_target_awareness()
 		return
@@ -1837,6 +1883,70 @@ func _update_target_awareness(delta: float) -> void:
 		if _investigation_timer <= 0.0:
 			if not _advance_search_probe():
 				_clear_target_awareness()
+		return
+
+	_is_investigating_last_seen = false
+	if _awareness_state != AwarenessState.SEARCH:
+		_awareness_state = AwarenessState.INVESTIGATE
+	_awareness_timer -= delta
+	if _awareness_timer <= 0.0:
+		_clear_target_awareness()
+
+
+func _update_simple_target_awareness(delta: float) -> void:
+	if _target == null or not is_instance_valid(_target):
+		_clear_target_awareness()
+		return
+
+	if _can_see_target():
+		_hide_last_seen_marker()
+		if _awareness_state != AwarenessState.COMBAT:
+			_detection_progress = minf(1.0, _detection_progress + delta / maxf(detection_time, 0.01))
+			if _detection_progress < 1.0:
+				return
+
+		var confirmed_position := _target.global_position
+		_update_visual_target_motion(confirmed_position, delta)
+		_receive_target_stimulus(confirmed_position, 1.0, &"visual", true)
+		_direct_sighting_share_timer += delta
+		if _direct_sighting_share_timer >= alert_share_delay and not _has_shared_current_sighting:
+			_share_player_sighting(_last_seen_target_position)
+		return
+
+	_direct_sighting_share_timer = 0.0
+	_has_shared_current_sighting = false
+	if not _has_last_seen_target:
+		_detection_progress = maxf(0.0, _detection_progress - delta / maxf(detection_decay_time, 0.01))
+		return
+
+	if _awareness_state == AwarenessState.COMBAT:
+		_awareness_state = AwarenessState.SEARCH
+		_detection_progress = 0.0
+		_awareness_timer = maxf(_awareness_timer, simple_search_memory_time)
+		_is_investigating_last_seen = false
+		_clear_cover_target()
+
+	_show_last_seen_marker_if_all_targets_lost(_last_seen_target_position)
+	if _awareness_state == AwarenessState.SUSPICIOUS:
+		_suspicious_timer -= delta
+		_awareness_timer -= delta
+		if _awareness_timer <= 0.0:
+			_clear_target_awareness()
+			return
+		if _suspicious_timer <= 0.0:
+			_awareness_state = AwarenessState.INVESTIGATE
+		return
+
+	if global_position.distance_squared_to(_last_seen_target_position) <= simple_search_arrival_distance * simple_search_arrival_distance:
+		_awareness_state = AwarenessState.SEARCH
+		if not _is_investigating_last_seen:
+			_is_investigating_last_seen = true
+			_investigation_timer = simple_search_scan_time
+			_start_clearing_scan()
+		_update_clearing_scan(delta)
+		_investigation_timer -= delta
+		if _investigation_timer <= 0.0:
+			_clear_target_awareness()
 		return
 
 	_is_investigating_last_seen = false
