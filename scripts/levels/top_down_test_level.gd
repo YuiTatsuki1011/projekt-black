@@ -16,18 +16,28 @@ const STEALTH_VIGNETTE_SCRIPT := preload("res://scripts/ui/stealth_vignette_over
 @export var stealth_vignette_edge_fraction: float = 0.18
 @export var stealth_vignette_min_thickness: float = 128.0
 @export var stealth_vignette_steps: int = 40
+@export var mission_objective_id: StringName = &"prototype_cache"
+@export var mission_objective_text: String = "Recover the data cache"
+@export var mission_extract_text: String = "Reach extraction"
 
 var _enemy_debug_vision_toggle_was_pressed: bool = false
 var _debug_noise_toggle_was_pressed: bool = false
 var _stealth_overlay_layer: CanvasLayer
 var _stealth_vignette: Control
 var _player: Node
+var _mission_hud: MissionStatusHud
+var _extraction_point: Node
+var _mission_objective_complete: bool = false
+var _mission_complete: bool = false
 
 
 func _ready() -> void:
 	_build_test_navigation_region()
 	_player = get_node_or_null("Player")
+	_mission_hud = get_node_or_null("MissionStatusHud") as MissionStatusHud
+	_extraction_point = get_node_or_null("ExtractionPoint")
 	_create_stealth_overlay()
+	_update_mission_display()
 
 
 func _process(_delta: float) -> void:
@@ -74,6 +84,57 @@ func emit_noise_event(
 			continue
 		if enemy.has_method("receive_noise_event"):
 			enemy.call("receive_noise_event", noise_position, resolved_radius, source, noise_type)
+
+
+func complete_mission_objective(objective_id: StringName, _source: Node = null) -> bool:
+	if _mission_complete:
+		return false
+	if objective_id != mission_objective_id:
+		show_mission_message("Unknown objective.")
+		return false
+	if _mission_objective_complete:
+		show_mission_message("Objective already secured.")
+		return true
+
+	_mission_objective_complete = true
+	show_mission_message("Objective secured. Extraction available.")
+	_update_mission_display()
+	return true
+
+
+func request_extraction(_source: Node = null) -> bool:
+	if _mission_complete:
+		return true
+	if not _mission_objective_complete:
+		show_mission_message("Extraction locked. Complete the objective first.")
+		return false
+
+	_mission_complete = true
+	_update_mission_display()
+	if _mission_hud != null:
+		_mission_hud.show_complete("MISSION COMPLETE", "EXTRACTED WITH OBJECTIVE")
+	return true
+
+
+func show_mission_message(message: String) -> void:
+	if _mission_hud != null:
+		_mission_hud.show_message(message)
+
+
+func _update_mission_display() -> void:
+	if _mission_hud != null:
+		if _mission_complete:
+			_mission_hud.set_objective_text("OBJECTIVE COMPLETE")
+			_mission_hud.set_status_text("EXTRACTED")
+		elif _mission_objective_complete:
+			_mission_hud.set_objective_text("OBJECTIVE: %s" % mission_extract_text.to_upper())
+			_mission_hud.set_status_text("RETURN TO EXTRACTION")
+		else:
+			_mission_hud.set_objective_text("OBJECTIVE: %s" % mission_objective_text.to_upper())
+			_mission_hud.set_status_text("IN PROGRESS")
+
+	if _extraction_point != null and _extraction_point.has_method("set_extraction_ready"):
+		_extraction_point.call("set_extraction_ready", _mission_objective_complete and not _mission_complete)
 
 
 func _is_player_stealth_mode_active() -> bool:

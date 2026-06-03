@@ -1,4 +1,4 @@
-[gd_scene load_steps=19 format=3]
+[gd_scene load_steps=22 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
@@ -13,6 +13,9 @@
 [ext_resource type="PackedScene" path="res://scenes/enemies/top_down_chaser_enemy.tscn" id="11_top_down_chaser"]
 [ext_resource type="PackedScene" path="res://scenes/enemies/top_down_ranged_enemy.tscn" id="12_top_down_ranged"]
 [ext_resource type="Script" path="res://scripts/levels/top_down_test_level.gd" id="13_top_down_level"]
+[ext_resource type="PackedScene" path="res://scenes/ui/mission_status_hud.tscn" id="14_mission_hud"]
+[ext_resource type="PackedScene" path="res://scenes/interaction/mission_objective.tscn" id="15_mission_objective"]
+[ext_resource type="PackedScene" path="res://scenes/interaction/extraction_point.tscn" id="16_extraction_point"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_horizontal_wall"]
 size = Vector2(960, 32)
@@ -193,6 +196,12 @@ spawn_offset = Vector2(255, 18)
 position = Vector2(900, 170)
 container_label = "LOOT BOX"
 
+[node name="MissionObjective" parent="." instance=ExtResource("15_mission_objective")]
+position = Vector2(820, 520)
+
+[node name="ExtractionPoint" parent="." instance=ExtResource("16_extraction_point")]
+position = Vector2(92, 548)
+
 [node name="Crosshair" parent="." instance=ExtResource("2_crosshair")]
 
 [node name="AmmoHud" parent="." instance=ExtResource("3_ammo_hud")]
@@ -202,3 +211,5 @@ container_label = "LOOT BOX"
 [node name="InventoryScreen" parent="." instance=ExtResource("5_inventory_screen")]
 
 [node name="DeathScreen" parent="." instance=ExtResource("6_death_screen")]
+
+[node name="MissionStatusHud" parent="." instance=ExtResource("14_mission_hud")]

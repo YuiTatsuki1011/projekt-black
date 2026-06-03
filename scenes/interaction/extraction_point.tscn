@@ -1,0 +1,48 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/interaction/extraction_point.gd" id="1_extraction_point"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_extraction"]
+size = Vector2(104, 70)
+
+[node name="ExtractionPoint" type="Area2D"]
+collision_layer = 16
+collision_mask = 0
+script = ExtResource("1_extraction_point")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_extraction")
+
+[node name="Pad" type="Polygon2D" parent="."]
+color = Color(0.34, 0.28, 0.1, 0.82)
+polygon = PackedVector2Array(-52, -35, 52, -35, 52, 35, -52, 35)
+
+[node name="Inner" type="Polygon2D" parent="."]
+color = Color(0.08, 0.12, 0.1, 1)
+polygon = PackedVector2Array(-40, -24, 40, -24, 40, 24, -40, 24)
+
+[node name="StripeA" type="Polygon2D" parent="."]
+color = Color(0.75, 0.62, 0.18, 0.82)
+polygon = PackedVector2Array(-44, -30, -32, -30, -48, 30, -52, 30)
+
+[node name="StripeB" type="Polygon2D" parent="."]
+color = Color(0.75, 0.62, 0.18, 0.82)
+polygon = PackedVector2Array(32, -30, 44, -30, 52, 30, 48, 30)
+
+[node name="Label" type="Label" parent="."]
+offset_left = -58.0
+offset_top = -58.0
+offset_right = 58.0
+offset_bottom = -36.0
+theme_override_font_sizes/font_size = 10
+text = "EXTRACT"
+horizontal_alignment = 1
+
+[node name="Prompt" type="Label" parent="."]
+offset_left = -38.0
+offset_top = 40.0
+offset_right = 38.0
+offset_bottom = 56.0
+theme_override_font_sizes/font_size = 9
+text = "LOCKED"
+horizontal_alignment = 1
