@@ -39,6 +39,7 @@ enum AttackState {
 @export var debug_last_seen_marker_visible: bool = true
 @export var desired_target_separation: float = 36.0
 @export var separation_push_speed: float = 420.0
+@export var hearing_sensitivity: float = 1.0
 @export var hit_vfx_scene: PackedScene
 @export var death_vfx_scene: PackedScene
 @export var corpse_container_scene: PackedScene
@@ -119,6 +120,7 @@ func apply_hit_reaction(direction: Vector2, _damage: int, hit_position: Vector2)
 	if knockback_direction == Vector2.ZERO:
 		knockback_direction = Vector2.RIGHT
 	_knockback_velocity = knockback_direction * knockback_strength
+	_react_to_attack_source(knockback_direction)
 	_spawn_vfx(hit_vfx_scene, hit_position)
 	_flash()
 
@@ -360,12 +362,32 @@ func receive_shared_player_sighting(sighting_position: Vector2, source: Node) ->
 	_remember_target_position(sighting_position, false)
 
 
+func receive_noise_event(noise_position: Vector2, radius: float, source: Node, _noise_type: StringName = &"generic") -> void:
+	if _is_dead or source == self:
+		return
+
+	var hearing_radius := maxf(radius * hearing_sensitivity, 0.0)
+	if global_position.distance_squared_to(noise_position) > hearing_radius * hearing_radius:
+		return
+
+	_set_facing(noise_position - global_position)
+	_remember_target_position(noise_position, false)
+
+
 func has_direct_target_sighting() -> bool:
 	return not _is_dead and _can_see_target()
 
 
 func has_active_player_sighting() -> bool:
 	return not _is_dead and _has_last_seen_target
+
+
+func is_in_combat_with_target() -> bool:
+	if _is_dead:
+		return false
+	if _attack_state == AttackState.WINDUP or _attack_state == AttackState.ACTIVE:
+		return true
+	return _is_target_visible()
 
 
 func _is_target_visible() -> bool:
@@ -422,6 +444,22 @@ func _remember_target_position(target_position: Vector2, is_direct_sighting: boo
 	_investigation_timer = 0.0
 	if is_direct_sighting and debug_last_seen_marker_visible:
 		_hide_last_seen_marker()
+
+
+func _react_to_attack_source(hit_direction: Vector2) -> void:
+	var source_position := Vector2.ZERO
+	var has_source := false
+	if _target != null and is_instance_valid(_target):
+		source_position = _target.global_position
+		has_source = true
+	elif hit_direction.length_squared() > 0.01:
+		source_position = global_position - hit_direction.normalized() * 120.0
+		has_source = true
+	if not has_source:
+		return
+
+	_set_facing(source_position - global_position)
+	_remember_target_position(source_position, false)
 
 
 func _share_player_sighting(sighting_position: Vector2) -> void:

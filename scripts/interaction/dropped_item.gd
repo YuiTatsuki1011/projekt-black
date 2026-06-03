@@ -1,6 +1,8 @@
 extends Area2D
 class_name DroppedItem
 
+const INTERACTABLE_GROUP := "interactables"
+
 @export var item_id: StringName = &"pistol_ammo"
 @export var quantity: int = 1
 @export var metadata: Dictionary = {}
@@ -11,6 +13,7 @@ class_name DroppedItem
 
 
 func _ready() -> void:
+	add_to_group(INTERACTABLE_GROUP)
 	_refresh_visual()
 
 

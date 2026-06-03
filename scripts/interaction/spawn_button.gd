@@ -1,6 +1,8 @@
 extends Area2D
 class_name SpawnButton
 
+const INTERACTABLE_GROUP := "interactables"
+
 @export var spawn_scene: PackedScene
 @export var button_label: String = "SPAWN"
 @export var spawn_parent_path: NodePath = NodePath("../Enemies")
@@ -12,6 +14,7 @@ class_name SpawnButton
 
 
 func _ready() -> void:
+	add_to_group(INTERACTABLE_GROUP)
 	label.text = button_label
 	if spawn_marker != null:
 		spawn_marker.position = spawn_offset

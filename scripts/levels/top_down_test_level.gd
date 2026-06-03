@@ -1,17 +1,28 @@
 extends Node2D
 class_name TopDownTestLevel
 
+const TOP_DOWN_ENEMY_GROUP := "top_down_enemies"
+const NOISE_RIPPLE_SCRIPT := preload("res://scripts/perception/noise_ripple.gd")
+
 @export var navigation_inner_margin: float = 24.0
 @export var navigation_obstacle_margin: float = 28.0
 @export var navigation_cell_size: float = 40.0
 @export var enemy_debug_vision_visible: bool = true
 @export var enemy_debug_vision_toggle_key: Key = KEY_F2
+@export var stealth_overlay_color: Color = Color(0.12, 0.28, 0.42, 0.18)
+@export var stealth_vignette_color: Color = Color(0.0, 0.01, 0.025, 0.42)
 
 var _enemy_debug_vision_toggle_was_pressed: bool = false
+var _stealth_overlay_layer: CanvasLayer
+var _stealth_tint: ColorRect
+var _stealth_edges: Array[ColorRect] = []
+var _player: Node
 
 
 func _ready() -> void:
 	_build_test_navigation_region()
+	_player = get_node_or_null("Player")
+	_create_stealth_overlay()
 
 
 func _process(_delta: float) -> void:
@@ -19,10 +30,113 @@ func _process(_delta: float) -> void:
 	if toggle_pressed and not _enemy_debug_vision_toggle_was_pressed:
 		enemy_debug_vision_visible = not enemy_debug_vision_visible
 	_enemy_debug_vision_toggle_was_pressed = toggle_pressed
+	_update_stealth_overlay()
 
 
 func is_enemy_debug_vision_visible() -> bool:
 	return enemy_debug_vision_visible
+
+
+func is_player_in_enemy_combat_state() -> bool:
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy != null and is_instance_valid(enemy) and enemy.has_method("is_in_combat_with_target"):
+			if bool(enemy.call("is_in_combat_with_target")):
+				return true
+	return false
+
+
+func emit_noise_event(
+	noise_position: Vector2,
+	radius: float,
+	source: Node = null,
+	noise_type: StringName = &"generic"
+) -> void:
+	var resolved_radius := maxf(radius, 1.0)
+	if _is_player_stealth_mode_active():
+		_spawn_noise_ripple(noise_position, resolved_radius, noise_type)
+
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy == null or not is_instance_valid(enemy) or enemy == source:
+			continue
+		if enemy.has_method("receive_noise_event"):
+			enemy.call("receive_noise_event", noise_position, resolved_radius, source, noise_type)
+
+
+func _is_player_stealth_mode_active() -> bool:
+	if _player == null or not is_instance_valid(_player):
+		_player = get_node_or_null("Player")
+	if _player != null and _player.has_method("is_stealth_mode_active"):
+		return bool(_player.call("is_stealth_mode_active"))
+	return false
+
+
+func _spawn_noise_ripple(noise_position: Vector2, radius: float, noise_type: StringName) -> void:
+	var ripple := NOISE_RIPPLE_SCRIPT.new()
+	add_child(ripple)
+	ripple.global_position = noise_position
+	var alpha := 0.28
+	if noise_type == &"gunshot":
+		alpha = 0.5
+	elif noise_type == &"footstep":
+		alpha = 0.18
+	ripple.setup(radius, 0.58, Color(1.0, 1.0, 1.0, alpha))
+
+
+func _create_stealth_overlay() -> void:
+	_stealth_overlay_layer = CanvasLayer.new()
+	_stealth_overlay_layer.name = "StealthOverlay"
+	_stealth_overlay_layer.layer = 30
+	add_child(_stealth_overlay_layer)
+
+	_stealth_tint = ColorRect.new()
+	_stealth_tint.name = "Tint"
+	_stealth_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stealth_tint.color = stealth_overlay_color
+	_stealth_overlay_layer.add_child(_stealth_tint)
+
+	for edge_name in ["Top", "Bottom", "Left", "Right"]:
+		var edge := ColorRect.new()
+		edge.name = edge_name
+		edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		edge.color = stealth_vignette_color
+		_stealth_overlay_layer.add_child(edge)
+		_stealth_edges.append(edge)
+
+	_update_stealth_overlay_layout()
+	_set_stealth_overlay_visible(false)
+
+
+func _update_stealth_overlay() -> void:
+	if _stealth_overlay_layer == null:
+		return
+
+	_update_stealth_overlay_layout()
+	_set_stealth_overlay_visible(_is_player_stealth_mode_active())
+
+
+func _update_stealth_overlay_layout() -> void:
+	if _stealth_tint == null:
+		return
+
+	var viewport_size := get_viewport_rect().size
+	_stealth_tint.position = Vector2.ZERO
+	_stealth_tint.size = viewport_size
+
+	var edge_thickness := maxf(minf(viewport_size.x, viewport_size.y) * 0.12, 96.0)
+	if _stealth_edges.size() >= 4:
+		_stealth_edges[0].position = Vector2.ZERO
+		_stealth_edges[0].size = Vector2(viewport_size.x, edge_thickness)
+		_stealth_edges[1].position = Vector2(0.0, viewport_size.y - edge_thickness)
+		_stealth_edges[1].size = Vector2(viewport_size.x, edge_thickness)
+		_stealth_edges[2].position = Vector2.ZERO
+		_stealth_edges[2].size = Vector2(edge_thickness, viewport_size.y)
+		_stealth_edges[3].position = Vector2(viewport_size.x - edge_thickness, 0.0)
+		_stealth_edges[3].size = Vector2(edge_thickness, viewport_size.y)
+
+
+func _set_stealth_overlay_visible(is_visible: bool) -> void:
+	if _stealth_overlay_layer != null:
+		_stealth_overlay_layer.visible = is_visible
 
 
 func _build_test_navigation_region() -> void:

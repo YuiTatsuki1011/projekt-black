@@ -1,6 +1,8 @@
 extends Area2D
 class_name ItemContainer
 
+const INTERACTABLE_GROUP := "interactables"
+
 @export var container_label: String = "LOOT BOX"
 @export var inventory_screen_path: NodePath = NodePath("../InventoryScreen")
 @export var requires_search: bool = true
@@ -20,6 +22,7 @@ var _unknown_entries_initialized: bool = false
 
 
 func _ready() -> void:
+	add_to_group(INTERACTABLE_GROUP)
 	label.text = container_label
 
 

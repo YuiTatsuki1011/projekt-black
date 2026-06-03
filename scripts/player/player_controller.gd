@@ -17,6 +17,7 @@ const FIREARM_SLOT_IDS := [&"firearm_1", &"firearm_2", &"firearm_3", &"firearm_4
 const DROPPED_ITEM_SCENE := preload("res://scenes/interaction/dropped_item.tscn")
 const ACTIVE_MAGAZINE_STATUS_ENTRY_ID := -10001
 const INTERACTION_HIGHLIGHT_NAME := "InteractionHighlight"
+const INTERACTABLE_GROUP := "interactables"
 
 enum MeleeState {
 	READY,
@@ -84,6 +85,13 @@ enum MovementMode {
 @export var top_down_collision_size: Vector2 = Vector2(24.0, 24.0)
 @export var top_down_interaction_radius: float = 62.0
 @export var top_down_camera_zoom: Vector2 = Vector2(1.45, 1.45)
+@export var stealth_scan_interaction_radius: float = 230.0
+@export var footstep_noise_radius: float = 48.0
+@export var footstep_noise_interval: float = 0.48
+@export var dodge_noise_radius: float = 150.0
+@export var melee_noise_radius: float = 120.0
+@export var reload_noise_radius: float = 70.0
+@export var gunshot_noise_radius: float = 560.0
 
 @onready var body_root: Node2D = $VisualRoot/BodyRoot
 @onready var arm_rig: Node2D = $ArmRig
@@ -165,6 +173,8 @@ var _melee_combo_damages: PackedInt32Array = PackedInt32Array([34, 48, 68])
 var _pending_damage_direction: Vector2 = Vector2.ZERO
 var _body_rotation_before_inventory: float = 0.0
 var _arm_rig_was_visible_before_inventory: bool = true
+var _stealth_suppressed_until_crouch_release: bool = false
+var _footstep_noise_timer: float = 0.0
 
 
 func _ready() -> void:
@@ -493,6 +503,7 @@ func _physics_process(delta: float) -> void:
 	_update_dodge(delta)
 	_handle_movement(delta)
 	move_and_slide()
+	_update_footstep_noise(delta)
 	_update_aim(delta)
 
 
@@ -556,7 +567,7 @@ func _handle_movement(delta: float) -> void:
 func _handle_side_view_movement(delta: float) -> void:
 	var action_locked := _is_inventory_open or _is_dodging or _melee_state != MeleeState.READY
 	var input_axis: float = 0.0 if _is_inventory_open else Input.get_axis("move_left", "move_right")
-	var wants_crouch: bool = Input.is_action_pressed("crouch") and is_on_floor() and not action_locked
+	var wants_crouch: bool = _can_hold_stealth_mode(action_locked) and is_on_floor()
 	_set_crouching(wants_crouch)
 
 	var active_speed: float = walk_speed
@@ -590,7 +601,7 @@ func _handle_side_view_movement(delta: float) -> void:
 func _handle_top_down_movement(delta: float) -> void:
 	var action_locked := _is_inventory_open or _is_dodging or _melee_state != MeleeState.READY
 	var input_vector := Vector2.ZERO if _is_inventory_open else _get_top_down_input_vector()
-	var wants_crouch := Input.is_action_pressed("crouch") and not action_locked
+	var wants_crouch := _can_hold_stealth_mode(action_locked)
 	_set_crouching(wants_crouch)
 
 	var active_speed: float = walk_speed
@@ -611,6 +622,34 @@ func _handle_top_down_movement(delta: float) -> void:
 		velocity = input_vector * active_speed + _damage_knockback_velocity
 
 	_damage_knockback_velocity = _damage_knockback_velocity.move_toward(Vector2.ZERO, damage_knockback_recovery * delta)
+
+
+func _can_hold_stealth_mode(action_locked: bool) -> bool:
+	var crouch_pressed := Input.is_action_pressed("crouch")
+	if not crouch_pressed:
+		_stealth_suppressed_until_crouch_release = false
+		return false
+
+	if _is_enemy_combat_active():
+		_stealth_suppressed_until_crouch_release = true
+		return false
+
+	return not action_locked and not _stealth_suppressed_until_crouch_release
+
+
+func _force_cancel_stealth_mode() -> void:
+	if not _is_crouching and _stealth_suppressed_until_crouch_release:
+		return
+
+	_stealth_suppressed_until_crouch_release = true
+	_set_crouching(false)
+
+
+func _is_enemy_combat_active() -> bool:
+	var current_scene := get_tree().current_scene
+	if current_scene != null and current_scene.has_method("is_player_in_enemy_combat_state"):
+		return bool(current_scene.call("is_player_in_enemy_combat_state"))
+	return false
 
 
 func _handle_actions() -> void:
@@ -962,8 +1001,10 @@ func _try_fire() -> void:
 	if projectile_scene == null:
 		return
 
+	_force_cancel_stealth_mode()
 	if _try_apply_close_barrel_hit():
 		_consume_round()
+		_emit_noise_event(muzzle.global_position, gunshot_noise_radius, &"gunshot")
 		return
 
 	var projectile: Node = projectile_scene.instantiate()
@@ -983,6 +1024,7 @@ func _try_fire() -> void:
 			projectile_2d.call("launch", shot_direction)
 
 	_consume_round()
+	_emit_noise_event(muzzle.global_position, gunshot_noise_radius, &"gunshot")
 
 
 func _start_reload() -> void:
@@ -1001,6 +1043,7 @@ func _start_reload() -> void:
 
 	_is_reloading = true
 	_reload_remaining = reload_time
+	_emit_noise_event(global_position, reload_noise_radius, &"reload")
 	reload_started.emit(reload_time)
 
 
@@ -1080,6 +1123,7 @@ func _try_start_dodge() -> void:
 	health.set_invulnerable_for(dodge_invulnerability_time)
 	body_root.modulate = Color(0.72, 0.78, 0.86, 1.0)
 	arm_rig.modulate = Color(0.72, 0.78, 0.86, 1.0)
+	_emit_noise_event(global_position, dodge_noise_radius, &"dodge")
 	_spawn_afterimage()
 
 
@@ -1121,6 +1165,35 @@ func _get_top_down_input_vector() -> Vector2:
 		return Vector2.ZERO
 
 	return input_vector.normalized()
+
+
+func _update_footstep_noise(delta: float) -> void:
+	if movement_mode != MovementMode.TOP_DOWN or _is_dead or _is_inventory_open:
+		return
+	if _is_dodging or _is_reloading or _is_chambering:
+		return
+
+	var horizontal_motion := velocity - _damage_knockback_velocity
+	if horizontal_motion.length_squared() <= 40.0 * 40.0:
+		_footstep_noise_timer = 0.0
+		return
+
+	_footstep_noise_timer -= delta
+	if _footstep_noise_timer > 0.0:
+		return
+
+	_footstep_noise_timer = maxf(footstep_noise_interval, 0.05)
+	var radius := footstep_noise_radius * (0.35 if _is_crouching else 1.0)
+	_emit_noise_event(global_position, radius, &"footstep")
+
+
+func _emit_noise_event(noise_position: Vector2, radius: float, noise_type: StringName) -> void:
+	if radius <= 0.0:
+		return
+
+	var current_scene := get_tree().current_scene
+	if current_scene != null and current_scene.has_method("emit_noise_event"):
+		current_scene.call("emit_noise_event", noise_position, radius, self, noise_type)
 
 
 func _spawn_afterimage() -> void:
@@ -1191,6 +1264,7 @@ func _try_start_melee_attack() -> void:
 	_melee_state = MeleeState.LUNGE
 	_melee_timer = melee_lunge_time
 	_set_melee_visual(true)
+	_emit_noise_event(global_position, melee_noise_radius, &"melee")
 
 
 func _update_melee(delta: float) -> void:
@@ -1383,6 +1457,10 @@ func is_inventory_open() -> bool:
 	return _is_inventory_open
 
 
+func is_stealth_mode_active() -> bool:
+	return movement_mode == MovementMode.TOP_DOWN and _is_crouching and not _is_enemy_combat_active()
+
+
 func _set_inventory_pose(is_enabled: bool) -> void:
 	if is_enabled:
 		_body_rotation_before_inventory = body_root.rotation
@@ -1491,6 +1569,7 @@ func _start_chambering() -> bool:
 
 	_is_chambering = true
 	_chambering_remaining = chamber_feed_time
+	_emit_noise_event(global_position, reload_noise_radius * 0.75, &"chamber")
 	chambering_started.emit(chamber_feed_time)
 	return true
 
@@ -1891,6 +1970,10 @@ func _update_interaction_highlights() -> void:
 		for interactable in _nearby_interactables:
 			if is_instance_valid(interactable):
 				active_interactables.append(interactable)
+		if is_stealth_mode_active():
+			for interactable in _get_stealth_scan_interactables():
+				if interactable not in active_interactables:
+					active_interactables.append(interactable)
 
 	for interactable in _highlighted_interactables.duplicate():
 		if not is_instance_valid(interactable) or interactable not in active_interactables:
@@ -1902,6 +1985,20 @@ func _update_interaction_highlights() -> void:
 		_set_interactable_highlight(interactable, true, interactable == hovered)
 		if interactable not in _highlighted_interactables:
 			_highlighted_interactables.append(interactable)
+
+
+func _get_stealth_scan_interactables() -> Array[Node2D]:
+	var scanned: Array[Node2D] = []
+	var scan_radius_squared := stealth_scan_interaction_radius * stealth_scan_interaction_radius
+	for node in get_tree().get_nodes_in_group(INTERACTABLE_GROUP):
+		if node == null or not is_instance_valid(node) or not node is Node2D:
+			continue
+
+		var interactable := node as Node2D
+		if global_position.distance_squared_to(interactable.global_position) <= scan_radius_squared:
+			scanned.append(interactable)
+
+	return scanned
 
 
 func _is_mouse_over_interactable(interactable: Node2D, mouse_position: Vector2) -> bool:
@@ -1945,8 +2042,12 @@ func _set_interactable_highlight(interactable: Node2D, is_visible: bool, _is_hov
 		return
 
 	highlight.visible = is_visible
-	highlight.width = 2.0
-	highlight.default_color = Color(1.0, 1.0, 1.0, 0.78)
+	highlight.width = 4.0 if is_stealth_mode_active() else 2.0
+	highlight.default_color = (
+		Color(0.76, 0.96, 1.0, 0.96)
+		if is_stealth_mode_active()
+		else Color(1.0, 1.0, 1.0, 0.78)
+	)
 
 
 func _create_interaction_highlight(interactable: Node2D) -> Line2D:
@@ -2096,6 +2197,8 @@ func _on_damaged(_amount: int, _current_health: int, _max_health: int) -> void:
 	damage_feedback.emit(_pending_damage_direction)
 	_pending_damage_direction = Vector2.ZERO
 	_spawn_player_bleed()
+	_force_cancel_stealth_mode()
+	_emit_noise_event(global_position, 130.0, &"pain")
 
 	if _damage_flash_tween != null:
 		_damage_flash_tween.kill()

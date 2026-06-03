@@ -1,6 +1,8 @@
 extends Area2D
 class_name ItemGrantButton
 
+const INTERACTABLE_GROUP := "interactables"
+
 @export var item_id: StringName = &"pistol_ammo"
 @export var quantity: int = 12
 @export var button_label: String = "AMMO"
@@ -10,6 +12,7 @@ class_name ItemGrantButton
 
 
 func _ready() -> void:
+	add_to_group(INTERACTABLE_GROUP)
 	label.text = button_label
 
 
