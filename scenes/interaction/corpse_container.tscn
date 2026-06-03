@@ -11,6 +11,7 @@ collision_layer = 16
 collision_mask = 0
 script = ExtResource("1_item_container")
 container_label = "CORPSE"
+layout_search_time_multiplier = 0.35
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
 shape = SubResource("CircleShape2D_corpse_container")

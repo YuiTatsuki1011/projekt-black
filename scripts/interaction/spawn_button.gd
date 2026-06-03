@@ -5,13 +5,16 @@ class_name SpawnButton
 @export var button_label: String = "SPAWN"
 @export var spawn_parent_path: NodePath = NodePath("../Enemies")
 @export var target_path: NodePath = NodePath("../Player")
+@export var spawn_offset: Vector2 = Vector2(300.0, 18.0)
 
-@onready var spawn_marker: Marker2D = $SpawnMarker
+@onready var spawn_marker: Marker2D = get_node_or_null("SpawnMarker") as Marker2D
 @onready var label: Label = $Label
 
 
 func _ready() -> void:
 	label.text = button_label
+	if spawn_marker != null:
+		spawn_marker.position = spawn_offset
 
 
 func interact(_interactor: Node) -> void:
@@ -27,13 +30,20 @@ func interact(_interactor: Node) -> void:
 
 	if spawned_node is Node2D:
 		var spawned_2d := spawned_node as Node2D
-		spawned_2d.global_position = spawn_marker.global_position
+		spawned_2d.global_position = _get_spawn_position()
 
 	var target := get_node_or_null(target_path) as Node2D
 	if target != null and spawned_node.has_method("set_target"):
 		spawned_node.call("set_target", target)
 
 	_flash_label()
+
+
+func _get_spawn_position() -> Vector2:
+	if spawn_marker != null:
+		return spawn_marker.global_position
+
+	return global_position + spawn_offset
 
 
 func _flash_label() -> void:

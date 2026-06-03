@@ -196,6 +196,7 @@ button_label = "CHASER"
 position = Vector2(786, 142)
 spawn_scene = ExtResource("12_top_down_ranged")
 button_label = "GUNNER"
+spawn_offset = Vector2(120, 18)
 
 [node name="LootBox" parent="." instance=ExtResource("10_item_container")]
 position = Vector2(900, 170)
