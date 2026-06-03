@@ -57,6 +57,14 @@ enum LostTargetDecision {
 	REGROUP,
 }
 
+enum LostTargetSquadRole {
+	NONE,
+	OVERWATCH,
+	SWEEP_LEFT,
+	SWEEP_RIGHT,
+	PRESSURE,
+}
+
 enum CoverActionState {
 	NONE,
 	MOVING,
@@ -149,6 +157,10 @@ enum CoverActionState {
 @export var panic_flee_speed_multiplier: float = 1.18
 @export var lost_target_retreat_distance: float = 230.0
 @export var lost_target_regroup_range: float = 360.0
+@export var lost_target_squad_tactics_enabled: bool = true
+@export var lost_target_sweep_offset_distance: float = 132.0
+@export var lost_target_sweep_forward_distance: float = 86.0
+@export var lost_target_overwatch_hold_distance: float = 220.0
 @export var tactical_ammo_capacity: int = 8
 @export var tactical_low_ammo_threshold: int = 2
 @export var debug_vision_visible: bool = true
@@ -224,6 +236,7 @@ var _cover_action_timer: float = 0.0
 var _cover_peek_position: Vector2 = Vector2.INF
 var _cover_hide_position: Vector2 = Vector2.INF
 var _lost_target_decision: int = LostTargetDecision.NONE
+var _lost_target_squad_role: int = LostTargetSquadRole.NONE
 var _lost_target_advantage_score: float = 0.0
 var _tactical_ammo_remaining: int = 0
 var _enemy_avoidance_side: float = 0.0
@@ -306,7 +319,7 @@ func _update_velocity(delta: float) -> void:
 		return
 	if _awareness_state == AwarenessState.SUSPICIOUS:
 		return
-	if _is_investigating_last_seen:
+	if _is_investigating_last_seen and not _should_move_while_investigating_lost_target():
 		return
 	if _is_morale_broken():
 		_apply_fallback_velocity()
@@ -318,7 +331,11 @@ func _update_velocity(delta: float) -> void:
 	if not visible_target and not maintaining_cover and _apply_lost_target_decision_velocity(target_position, delta):
 		return
 
-	var movement_position := _get_group_pursuit_position(target_position)
+	var movement_position := _get_lost_target_squad_movement_position(target_position) if not visible_target else Vector2.INF
+	if movement_position != Vector2.INF:
+		_current_group_role = GroupTacticRole.NONE
+	else:
+		movement_position = _get_group_pursuit_position(target_position)
 	var cover_position := _get_cover_movement_position(target_position, visible_target or maintaining_cover, movement_position)
 	if cover_position != Vector2.INF:
 		_move_toward_cover(cover_position, target_position)
@@ -756,6 +773,7 @@ func _enter_lost_target_search() -> void:
 	_search_probe_points.clear()
 	_search_probe_index = 0
 	_choose_lost_target_decision()
+	_choose_lost_target_squad_role()
 
 	var memory_time := post_combat_search_memory_time
 	match _lost_target_decision:
@@ -798,6 +816,70 @@ func _choose_lost_target_decision() -> void:
 		_lost_target_decision = LostTargetDecision.REGROUP
 	else:
 		_lost_target_decision = LostTargetDecision.CAUTIOUS_SEARCH
+
+
+func _choose_lost_target_squad_role() -> void:
+	if not lost_target_squad_tactics_enabled:
+		_lost_target_squad_role = LostTargetSquadRole.NONE
+		return
+	if (
+		_lost_target_decision == LostTargetDecision.FIGHTING_RETREAT
+		or _lost_target_decision == LostTargetDecision.PANIC_FLEE
+		or _lost_target_decision == LostTargetDecision.REGROUP
+	):
+		_lost_target_squad_role = LostTargetSquadRole.NONE
+		return
+
+	var members := _get_active_group_members()
+	if members.size() <= 1:
+		_lost_target_squad_role = LostTargetSquadRole.NONE
+		return
+
+	var rank := _get_group_rank(members)
+	match rank % 4:
+		0:
+			_lost_target_squad_role = LostTargetSquadRole.OVERWATCH
+		1:
+			_lost_target_squad_role = LostTargetSquadRole.SWEEP_LEFT
+		2:
+			_lost_target_squad_role = LostTargetSquadRole.SWEEP_RIGHT
+		_:
+			_lost_target_squad_role = LostTargetSquadRole.PRESSURE
+
+
+func _should_move_while_investigating_lost_target() -> bool:
+	return (
+		_lost_target_squad_role == LostTargetSquadRole.SWEEP_LEFT
+		or _lost_target_squad_role == LostTargetSquadRole.SWEEP_RIGHT
+		or _lost_target_squad_role == LostTargetSquadRole.PRESSURE
+	)
+
+
+func _get_lost_target_squad_movement_position(base_position: Vector2) -> Vector2:
+	if _lost_target_squad_role == LostTargetSquadRole.NONE:
+		return Vector2.INF
+
+	var approach_direction := (base_position - global_position).normalized()
+	if approach_direction.length_squared() <= 0.01:
+		approach_direction = _facing_direction.normalized()
+	if approach_direction.length_squared() <= 0.01:
+		approach_direction = Vector2.RIGHT
+
+	var side_direction := Vector2(-approach_direction.y, approach_direction.x)
+	match _lost_target_squad_role:
+		LostTargetSquadRole.OVERWATCH:
+			var watch_distance := global_position.distance_to(base_position)
+			if watch_distance <= lost_target_overwatch_hold_distance and _has_line_of_sight_to_position(base_position):
+				return global_position
+			return base_position - approach_direction * minf(lost_target_overwatch_hold_distance, preferred_range)
+		LostTargetSquadRole.SWEEP_LEFT:
+			return base_position + side_direction * lost_target_sweep_offset_distance + approach_direction * lost_target_sweep_forward_distance
+		LostTargetSquadRole.SWEEP_RIGHT:
+			return base_position - side_direction * lost_target_sweep_offset_distance + approach_direction * lost_target_sweep_forward_distance
+		LostTargetSquadRole.PRESSURE:
+			return base_position + approach_direction * lost_target_sweep_forward_distance
+
+	return Vector2.INF
 
 
 func _get_combat_advantage_score() -> float:
@@ -1879,6 +1961,8 @@ func _get_debug_state_text() -> String:
 			state_text = "DETECT"
 		elif _awareness_state == AwarenessState.SUSPICIOUS:
 			state_text = "SUSPECT"
+		elif _lost_target_squad_role != LostTargetSquadRole.NONE and _has_last_seen_target:
+			state_text = _get_lost_target_squad_role_code()
 		elif _is_investigating_last_seen:
 			state_text = "INVEST"
 		elif _awareness_state == AwarenessState.INVESTIGATE:
@@ -1953,6 +2037,20 @@ func _get_lost_target_decision_code() -> String:
 			return "FLEE"
 		LostTargetDecision.REGROUP:
 			return "GROUP"
+
+	return "SEARCH"
+
+
+func _get_lost_target_squad_role_code() -> String:
+	match _lost_target_squad_role:
+		LostTargetSquadRole.OVERWATCH:
+			return "WATCH"
+		LostTargetSquadRole.SWEEP_LEFT:
+			return "SW-L"
+		LostTargetSquadRole.SWEEP_RIGHT:
+			return "SW-R"
+		LostTargetSquadRole.PRESSURE:
+			return "PRESS"
 
 	return "SEARCH"
 
@@ -2089,6 +2187,7 @@ func _receive_target_stimulus(
 	if is_direct_sighting:
 		_awareness_state = AwarenessState.COMBAT
 		_lost_target_decision = LostTargetDecision.NONE
+		_lost_target_squad_role = LostTargetSquadRole.NONE
 		_is_post_combat_search = false
 		_suspicious_timer = 0.0
 		_detection_progress = 1.0
@@ -2176,6 +2275,7 @@ func _clear_target_awareness() -> void:
 	_current_group_role = GroupTacticRole.NONE
 	_is_fallback_active = false
 	_lost_target_decision = LostTargetDecision.NONE
+	_lost_target_squad_role = LostTargetSquadRole.NONE
 	_lost_target_advantage_score = 0.0
 	_tactical_ammo_remaining = tactical_ammo_capacity
 	_clear_cover_target()
