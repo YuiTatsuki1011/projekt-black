@@ -50,6 +50,10 @@ enum AwarenessState {
 @export var pursuit_prediction_time: float = 0.55
 @export var max_pursuit_prediction_distance: float = 92.0
 @export var combat_peripheral_tracking_time: float = 0.55
+@export var clearing_scan_angle_degrees: float = 68.0
+@export var clearing_scan_step_time: float = 0.28
+@export var corner_clearing_angle_degrees: float = 28.0
+@export var corner_clearing_sweep_speed: float = 5.5
 @export var debug_vision_visible: bool = true
 @export var debug_vision_focus_distance: float = 380.0
 @export var debug_vision_segments: int = 24
@@ -98,6 +102,10 @@ var _has_visual_target_sample: bool = false
 var _last_visual_target_position: Vector2 = Vector2.ZERO
 var _estimated_target_velocity: Vector2 = Vector2.ZERO
 var _combat_peripheral_tracking_timer: float = 0.0
+var _clearing_scan_directions: Array[Vector2] = []
+var _clearing_scan_index: int = 0
+var _clearing_scan_step_timer: float = 0.0
+var _corner_clearing_phase: float = 0.0
 var _debug_label: Label
 var _vision_cone: Polygon2D
 var _detection_bar_root: Node2D
@@ -132,7 +140,7 @@ func _physics_process(delta: float) -> void:
 	_update_target_awareness(delta)
 	_update_visual_tracking(delta)
 	_update_attack_state(delta)
-	_update_velocity()
+	_update_velocity(delta)
 	_update_debug_label()
 	_update_debug_vision()
 	_update_detection_bar()
@@ -161,7 +169,7 @@ func _resolve_target() -> void:
 		_target = current_scene.get_node_or_null("Player") as Node2D
 
 
-func _update_velocity() -> void:
+func _update_velocity(delta: float) -> void:
 	velocity = _knockback_velocity
 	if not _has_last_seen_target:
 		return
@@ -178,8 +186,12 @@ func _update_velocity() -> void:
 	match _attack_state:
 		AttackState.CHASE:
 			if target_distance > desired_target_separation:
-				velocity += _get_navigation_direction_to(_last_seen_target_position, target_direction) * move_speed
-				_set_facing(to_target)
+				var move_direction := _get_navigation_direction_to(_last_seen_target_position, target_direction)
+				velocity += move_direction * move_speed
+				if _has_line_of_sight_to_position(_last_seen_target_position):
+					_set_facing(to_target)
+				else:
+					_turn_facing_toward(_get_corner_clearing_direction(move_direction, target_direction, delta), delta)
 		AttackState.ACTIVE:
 			if target_distance > desired_target_separation:
 				velocity += _attack_direction * attack_lunge_speed
@@ -376,11 +388,11 @@ func _update_target_awareness(delta: float) -> void:
 
 	if global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
 		_awareness_state = AwarenessState.SEARCH
-		if _estimated_target_velocity.length_squared() > 1.0:
-			_turn_facing_toward(_estimated_target_velocity.normalized(), delta)
 		if not _is_investigating_last_seen:
 			_is_investigating_last_seen = true
 			_investigation_timer = investigation_time
+			_start_clearing_scan()
+		_update_clearing_scan(delta)
 		_investigation_timer -= delta
 		if _investigation_timer <= 0.0:
 			_clear_target_awareness()
@@ -457,6 +469,51 @@ func _get_predicted_pursuit_position(target_position: Vector2) -> Vector2:
 		lead = lead.normalized() * max_pursuit_prediction_distance
 
 	return target_position + lead
+
+
+func _get_corner_clearing_direction(move_direction: Vector2, target_direction: Vector2, delta: float) -> Vector2:
+	var base_direction := (move_direction + target_direction * 0.35).normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = move_direction.normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = _facing_direction.normalized()
+
+	_corner_clearing_phase += corner_clearing_sweep_speed * delta
+	var sweep_angle := sin(_corner_clearing_phase) * deg_to_rad(corner_clearing_angle_degrees)
+	return base_direction.rotated(sweep_angle).normalized()
+
+
+func _start_clearing_scan() -> void:
+	var base_direction := _estimated_target_velocity.normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = (_last_seen_target_position - global_position).normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = _facing_direction.normalized()
+	if base_direction.length_squared() <= 0.01:
+		base_direction = Vector2.RIGHT
+
+	var side_angle := deg_to_rad(clearing_scan_angle_degrees)
+	_clearing_scan_directions = [
+		base_direction,
+		base_direction.rotated(-side_angle),
+		base_direction.rotated(side_angle),
+		base_direction.rotated(-side_angle * 0.45),
+		base_direction.rotated(side_angle * 0.45),
+	]
+	_clearing_scan_index = 0
+	_clearing_scan_step_timer = clearing_scan_step_time
+
+
+func _update_clearing_scan(delta: float) -> void:
+	if _clearing_scan_directions.is_empty():
+		_start_clearing_scan()
+
+	_clearing_scan_step_timer -= delta
+	if _clearing_scan_step_timer <= 0.0:
+		_clearing_scan_index = (_clearing_scan_index + 1) % _clearing_scan_directions.size()
+		_clearing_scan_step_timer = clearing_scan_step_time
+
+	_turn_facing_toward(_clearing_scan_directions[_clearing_scan_index], delta)
 
 
 func _get_debug_state_text() -> String:
@@ -675,6 +732,10 @@ func _clear_target_awareness() -> void:
 	_has_visual_target_sample = false
 	_estimated_target_velocity = Vector2.ZERO
 	_combat_peripheral_tracking_timer = 0.0
+	_clearing_scan_directions.clear()
+	_clearing_scan_index = 0
+	_clearing_scan_step_timer = 0.0
+	_corner_clearing_phase = 0.0
 	_hide_last_seen_marker_if_no_active_sightings()
 
 
