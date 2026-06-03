@@ -24,6 +24,8 @@ enum ShootState {
 @export var telegraph_length: float = 760.0
 @export var search_memory_time: float = 2.4
 @export_flags_2d_physics var line_of_sight_blocker_mask: int = 1
+@export var use_navigation: bool = true
+@export var debug_state_visible: bool = true
 @export var hit_vfx_scene: PackedScene
 @export var death_vfx_scene: PackedScene
 @export var knockback_strength: float = 110.0
@@ -36,6 +38,7 @@ enum ShootState {
 @onready var gun_root: Node2D = $GunRoot
 @onready var muzzle: Marker2D = $GunRoot/Muzzle
 @onready var telegraph_line: Line2D = $TelegraphLine
+@onready var navigation_agent: NavigationAgent2D = get_node_or_null("NavigationAgent2D") as NavigationAgent2D
 @onready var loot_dropper: Node = get_node_or_null("LootDropper")
 
 var _target: Node2D
@@ -50,12 +53,15 @@ var _locked_direction: Vector2 = Vector2.LEFT
 var _has_last_seen_target: bool = false
 var _last_seen_target_position: Vector2 = Vector2.ZERO
 var _awareness_timer: float = 0.0
+var _debug_label: Label
 
 
 func _ready() -> void:
 	_base_body_color = body_visual.color
 	_base_eye_color = eye_visual.color
 	_resolve_target()
+	_configure_navigation_agent()
+	_configure_debug_label()
 	health.damaged.connect(_on_damaged)
 	health.died.connect(_on_died)
 	_shot_timer = initial_shot_delay
@@ -76,6 +82,7 @@ func _physics_process(delta: float) -> void:
 	_update_target_awareness(delta)
 	_update_shoot_state(delta)
 	_update_velocity()
+	_update_debug_label()
 	_knockback_velocity = _knockback_velocity.move_toward(Vector2.ZERO, knockback_recovery * delta)
 	move_and_slide()
 
@@ -116,9 +123,44 @@ func _update_velocity() -> void:
 	if visible_target and target_distance < retreat_range:
 		velocity -= target_direction * move_speed
 	elif visible_target and target_distance > preferred_range:
-		velocity += target_direction * move_speed
+		velocity += _get_navigation_direction_to(target_position, target_direction) * move_speed
 	elif not visible_target and target_distance > 24.0:
-		velocity += target_direction * move_speed
+		velocity += _get_navigation_direction_to(target_position, target_direction) * move_speed
+
+
+func _configure_navigation_agent() -> void:
+	if navigation_agent == null:
+		return
+
+	navigation_agent.path_desired_distance = 12.0
+	navigation_agent.target_desired_distance = 18.0
+
+
+func _configure_debug_label() -> void:
+	if not debug_state_visible:
+		return
+
+	_debug_label = Label.new()
+	_debug_label.name = "DebugStateLabel"
+	_debug_label.position = Vector2(-38.0, 26.0)
+	_debug_label.size = Vector2(76.0, 16.0)
+	_debug_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_debug_label.add_theme_font_size_override("font_size", 8)
+	_debug_label.modulate = Color(0.92, 0.72, 0.58, 0.82)
+	add_child(_debug_label)
+
+
+func _get_navigation_direction_to(target_position: Vector2, fallback_direction: Vector2) -> Vector2:
+	if not use_navigation or navigation_agent == null or not is_instance_valid(navigation_agent):
+		return fallback_direction
+
+	navigation_agent.target_position = target_position
+	var next_path_position := navigation_agent.get_next_path_position()
+	var to_next := next_path_position - global_position
+	if to_next.length_squared() <= 4.0:
+		return fallback_direction
+
+	return to_next.normalized()
 
 
 func _update_shoot_state(delta: float) -> void:
@@ -274,6 +316,30 @@ func _update_target_awareness(delta: float) -> void:
 	_awareness_timer -= delta
 	if _awareness_timer <= 0.0 or global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
 		_has_last_seen_target = false
+
+
+func _get_debug_state_text() -> String:
+	match _shoot_state:
+		ShootState.TRACKING:
+			return "TRACK"
+		ShootState.WINDUP:
+			return "LOCK"
+		ShootState.RECOVERY:
+			return "RECOVER"
+
+	if _is_target_visible():
+		return "READY"
+	if _has_last_seen_target:
+		return "SEARCH"
+	return "IDLE"
+
+
+func _update_debug_label() -> void:
+	if _debug_label == null:
+		return
+
+	_debug_label.visible = debug_state_visible
+	_debug_label.text = _get_debug_state_text()
 
 
 func _is_target_visible() -> bool:

@@ -49,6 +49,8 @@ current_health = 55
 [node name="HealthIndicator" parent="." instance=ExtResource("3_health_indicator")]
 position = Vector2(0, -32)
 
+[node name="NavigationAgent2D" type="NavigationAgent2D" parent="."]
+
 [node name="LootDropper" type="Node" parent="."]
 script = ExtResource("6_loot_dropper")
 item_ids = Array[StringName]([&"pistol_ammo"])

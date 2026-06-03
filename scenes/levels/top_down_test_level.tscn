@@ -1,4 +1,4 @@
-[gd_scene load_steps=18 format=3]
+[gd_scene load_steps=19 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
@@ -12,6 +12,7 @@
 [ext_resource type="PackedScene" path="res://scenes/interaction/item_container.tscn" id="10_item_container"]
 [ext_resource type="PackedScene" path="res://scenes/enemies/top_down_chaser_enemy.tscn" id="11_top_down_chaser"]
 [ext_resource type="PackedScene" path="res://scenes/enemies/top_down_ranged_enemy.tscn" id="12_top_down_ranged"]
+[ext_resource type="Script" path="res://scripts/levels/top_down_test_level.gd" id="13_top_down_level"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_horizontal_wall"]
 size = Vector2(960, 32)
@@ -29,6 +30,7 @@ size = Vector2(64, 130)
 size = Vector2(180, 36)
 
 [node name="TopDownTestLevel" type="Node2D"]
+script = ExtResource("13_top_down_level")
 
 [node name="FloorVisual" type="Polygon2D" parent="."]
 color = Color(0.19, 0.19, 0.185, 1)
