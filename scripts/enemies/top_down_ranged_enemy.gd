@@ -87,7 +87,7 @@ enum CoverActionState {
 @export var projectile_speed: float = 540.0
 @export var telegraph_length: float = 760.0
 @export var search_memory_time: float = 2.4
-@export var post_combat_search_memory_time: float = 6.0
+@export var post_combat_search_memory_time: float = 10.0
 @export_flags_2d_physics var line_of_sight_blocker_mask: int = 1
 @export var use_navigation: bool = true
 @export var debug_state_visible: bool = true
@@ -114,6 +114,7 @@ enum CoverActionState {
 @export var corner_clearing_sweep_speed: float = 4.8
 @export var search_probe_radius: float = 96.0
 @export var search_probe_investigation_time: float = 0.9
+@export var post_combat_search_probe_cycles: int = 3
 @export_enum("Light Melee", "Light Firearm", "Heavy Assault", "Support", "Beast") var ai_archetype: int = EnemyArchetype.LIGHT_FIREARM
 @export_enum("Balanced", "Brave", "Cautious", "Cowardly", "Protective", "Selfish") var ai_personality: int = EnemyPersonality.CAUTIOUS
 @export_range(0, 10, 1) var unit_importance: int = 2
@@ -226,6 +227,7 @@ var _corner_clearing_phase: float = 0.0
 var _is_post_combat_search: bool = false
 var _search_probe_points: Array[Vector2] = []
 var _search_probe_index: int = 0
+var _search_probe_cycle: int = 0
 var _has_search_probe_plan: bool = false
 var _is_search_probe_target: bool = false
 var _current_group_role: int = GroupTacticRole.NONE
@@ -776,6 +778,7 @@ func _enter_lost_target_search(share_to_squad: bool = true) -> void:
 	_has_search_probe_plan = false
 	_search_probe_points.clear()
 	_search_probe_index = 0
+	_search_probe_cycle = 0
 	if share_to_squad:
 		_share_lost_target_search(_last_seen_target_position)
 	_choose_lost_target_decision()
@@ -1821,6 +1824,10 @@ func _update_target_awareness(delta: float) -> void:
 
 	if global_position.distance_squared_to(_last_seen_target_position) <= 24.0 * 24.0:
 		_awareness_state = AwarenessState.SEARCH
+		_awareness_timer -= delta
+		if _awareness_timer <= 0.0:
+			_clear_target_awareness()
+			return
 		if not _is_investigating_last_seen:
 			_is_investigating_last_seen = true
 			_investigation_timer = _get_current_investigation_time()
@@ -1965,7 +1972,15 @@ func _advance_search_probe() -> bool:
 	if not _has_search_probe_plan:
 		_build_search_probe_plan()
 	if _search_probe_index >= _search_probe_points.size():
-		return false
+		if _awareness_timer <= 0.0:
+			return false
+		if _search_probe_cycle + 1 >= maxi(post_combat_search_probe_cycles, 1):
+			return false
+		_search_probe_cycle += 1
+		_has_search_probe_plan = false
+		_build_search_probe_plan()
+		if _search_probe_index >= _search_probe_points.size():
+			return false
 
 	_last_seen_target_position = _search_probe_points[_search_probe_index]
 	_search_probe_index += 1
@@ -1980,6 +1995,7 @@ func _advance_search_probe() -> bool:
 func _build_search_probe_plan() -> void:
 	var origin := _last_seen_target_position
 	var probe_radius := search_probe_radius * _get_lost_target_probe_radius_multiplier()
+	probe_radius *= 1.0 + float(_search_probe_cycle) * 0.25
 	var base_direction := _estimated_target_velocity.normalized()
 	if base_direction.length_squared() <= 0.01:
 		base_direction = (_last_seen_target_position - global_position).normalized()
@@ -1988,6 +2004,7 @@ func _build_search_probe_plan() -> void:
 	if base_direction.length_squared() <= 0.01:
 		base_direction = Vector2.RIGHT
 
+	base_direction = base_direction.rotated(deg_to_rad(32.0 * float(_search_probe_cycle)))
 	var side_angle := deg_to_rad(65.0)
 	var back_angle := deg_to_rad(140.0)
 	_search_probe_points = [
@@ -2158,6 +2175,7 @@ func receive_shared_lost_target_search(sighting_position: Vector2, source: Node)
 	_has_search_probe_plan = false
 	_search_probe_points.clear()
 	_search_probe_index = 0
+	_search_probe_cycle = 0
 	_stimulus_confidence = maxf(_stimulus_confidence, shared_sighting_confidence)
 	_last_stimulus_type = &"shared_search"
 	_choose_lost_target_decision()
@@ -2415,6 +2433,7 @@ func _clear_target_awareness() -> void:
 	_is_post_combat_search = false
 	_search_probe_points.clear()
 	_search_probe_index = 0
+	_search_probe_cycle = 0
 	_has_search_probe_plan = false
 	_is_search_probe_target = false
 	_current_group_role = GroupTacticRole.NONE
