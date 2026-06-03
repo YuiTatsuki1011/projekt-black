@@ -161,18 +161,6 @@ walk_speed = 208.0
 
 [node name="Enemies" type="Node2D" parent="."]
 
-[node name="ChaserA" parent="Enemies" instance=ExtResource("11_top_down_chaser")]
-position = Vector2(650, 292)
-
-[node name="ChaserB" parent="Enemies" instance=ExtResource("11_top_down_chaser")]
-position = Vector2(830, 520)
-
-[node name="GunnerA" parent="Enemies" instance=ExtResource("12_top_down_ranged")]
-position = Vector2(812, 292)
-
-[node name="GunnerB" parent="Enemies" instance=ExtResource("12_top_down_ranged")]
-position = Vector2(540, 520)
-
 [node name="TargetButton" parent="." instance=ExtResource("7_spawn_button")]
 position = Vector2(162, 142)
 spawn_scene = ExtResource("8_training_target")
@@ -190,15 +178,16 @@ button_label = "HEAVY PISTOL"
 quantity = 1
 
 [node name="ChaserButton" parent="." instance=ExtResource("7_spawn_button")]
-position = Vector2(630, 142)
+position = Vector2(170, 298)
 spawn_scene = ExtResource("11_top_down_chaser")
 button_label = "CHASER"
+spawn_offset = Vector2(255, -18)
 
 [node name="GunnerButton" parent="." instance=ExtResource("7_spawn_button")]
-position = Vector2(786, 142)
+position = Vector2(170, 362)
 spawn_scene = ExtResource("12_top_down_ranged")
 button_label = "GUNNER"
-spawn_offset = Vector2(120, 18)
+spawn_offset = Vector2(255, 18)
 
 [node name="LootBox" parent="." instance=ExtResource("10_item_container")]
 position = Vector2(900, 170)
