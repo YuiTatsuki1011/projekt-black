@@ -86,6 +86,7 @@ enum MovementMode {
 @export var top_down_interaction_radius: float = 62.0
 @export var top_down_camera_zoom: Vector2 = Vector2(1.45, 1.45)
 @export var stealth_scan_interaction_radius: float = 230.0
+@export var stealth_toggle_mode: bool = true
 @export var footstep_noise_radius: float = 48.0
 @export var footstep_noise_interval: float = 0.48
 @export var dodge_noise_radius: float = 150.0
@@ -173,6 +174,8 @@ var _melee_combo_damages: PackedInt32Array = PackedInt32Array([34, 48, 68])
 var _pending_damage_direction: Vector2 = Vector2.ZERO
 var _body_rotation_before_inventory: float = 0.0
 var _arm_rig_was_visible_before_inventory: bool = true
+var _stealth_mode_enabled: bool = false
+var _stealth_input_was_pressed: bool = false
 var _stealth_suppressed_until_crouch_release: bool = false
 var _footstep_noise_timer: float = 0.0
 
@@ -567,7 +570,7 @@ func _handle_movement(delta: float) -> void:
 func _handle_side_view_movement(delta: float) -> void:
 	var action_locked := _is_inventory_open or _is_dodging or _melee_state != MeleeState.READY
 	var input_axis: float = 0.0 if _is_inventory_open else Input.get_axis("move_left", "move_right")
-	var wants_crouch: bool = _can_hold_stealth_mode(action_locked) and is_on_floor()
+	var wants_crouch: bool = _should_use_stealth_mode(action_locked) and is_on_floor()
 	_set_crouching(wants_crouch)
 
 	var active_speed: float = walk_speed
@@ -601,7 +604,7 @@ func _handle_side_view_movement(delta: float) -> void:
 func _handle_top_down_movement(delta: float) -> void:
 	var action_locked := _is_inventory_open or _is_dodging or _melee_state != MeleeState.READY
 	var input_vector := Vector2.ZERO if _is_inventory_open else _get_top_down_input_vector()
-	var wants_crouch := _can_hold_stealth_mode(action_locked)
+	var wants_crouch := _should_use_stealth_mode(action_locked)
 	_set_crouching(wants_crouch)
 
 	var active_speed: float = walk_speed
@@ -624,23 +627,38 @@ func _handle_top_down_movement(delta: float) -> void:
 	_damage_knockback_velocity = _damage_knockback_velocity.move_toward(Vector2.ZERO, damage_knockback_recovery * delta)
 
 
-func _can_hold_stealth_mode(action_locked: bool) -> bool:
+func _should_use_stealth_mode(action_locked: bool) -> bool:
 	var crouch_pressed := Input.is_action_pressed("crouch")
+	var crouch_just_pressed := crouch_pressed and not _stealth_input_was_pressed
+	_stealth_input_was_pressed = crouch_pressed
+
 	if not crouch_pressed:
 		_stealth_suppressed_until_crouch_release = false
-		return false
 
 	if _is_enemy_combat_active():
+		_stealth_mode_enabled = false
 		_stealth_suppressed_until_crouch_release = true
 		return false
 
-	return not action_locked and not _stealth_suppressed_until_crouch_release
+	if action_locked:
+		return false
+
+	if stealth_toggle_mode:
+		if crouch_just_pressed and not _stealth_suppressed_until_crouch_release:
+			_stealth_mode_enabled = not _stealth_mode_enabled
+		return _stealth_mode_enabled
+
+	if not crouch_pressed:
+		return false
+
+	return not _stealth_suppressed_until_crouch_release
 
 
 func _force_cancel_stealth_mode() -> void:
-	if not _is_crouching and _stealth_suppressed_until_crouch_release:
+	if not _is_crouching and not _stealth_mode_enabled and _stealth_suppressed_until_crouch_release:
 		return
 
+	_stealth_mode_enabled = false
 	_stealth_suppressed_until_crouch_release = true
 	_set_crouching(false)
 

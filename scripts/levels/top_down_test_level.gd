@@ -3,6 +3,7 @@ class_name TopDownTestLevel
 
 const TOP_DOWN_ENEMY_GROUP := "top_down_enemies"
 const NOISE_RIPPLE_SCRIPT := preload("res://scripts/perception/noise_ripple.gd")
+const STEALTH_VIGNETTE_SCRIPT := preload("res://scripts/ui/stealth_vignette_overlay.gd")
 
 @export var navigation_inner_margin: float = 24.0
 @export var navigation_obstacle_margin: float = 12.0
@@ -11,14 +12,15 @@ const NOISE_RIPPLE_SCRIPT := preload("res://scripts/perception/noise_ripple.gd")
 @export var enemy_debug_vision_toggle_key: Key = KEY_F2
 @export var debug_noise_visible: bool = false
 @export var debug_noise_toggle_key: Key = KEY_F3
-@export var stealth_overlay_color: Color = Color(0.12, 0.28, 0.42, 0.18)
-@export var stealth_vignette_color: Color = Color(0.0, 0.01, 0.025, 0.42)
+@export var stealth_vignette_color: Color = Color(0.0, 0.0, 0.0, 0.62)
+@export var stealth_vignette_edge_fraction: float = 0.18
+@export var stealth_vignette_min_thickness: float = 128.0
+@export var stealth_vignette_steps: int = 40
 
 var _enemy_debug_vision_toggle_was_pressed: bool = false
 var _debug_noise_toggle_was_pressed: bool = false
 var _stealth_overlay_layer: CanvasLayer
-var _stealth_tint: ColorRect
-var _stealth_edges: Array[ColorRect] = []
+var _stealth_vignette: Control
 var _player: Node
 
 
@@ -100,19 +102,18 @@ func _create_stealth_overlay() -> void:
 	_stealth_overlay_layer.layer = 30
 	add_child(_stealth_overlay_layer)
 
-	_stealth_tint = ColorRect.new()
-	_stealth_tint.name = "Tint"
-	_stealth_tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_stealth_tint.color = stealth_overlay_color
-	_stealth_overlay_layer.add_child(_stealth_tint)
-
-	for edge_name in ["Top", "Bottom", "Left", "Right"]:
-		var edge := ColorRect.new()
-		edge.name = edge_name
-		edge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		edge.color = stealth_vignette_color
-		_stealth_overlay_layer.add_child(edge)
-		_stealth_edges.append(edge)
+	_stealth_vignette = STEALTH_VIGNETTE_SCRIPT.new()
+	_stealth_vignette.name = "Vignette"
+	_stealth_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_stealth_overlay_layer.add_child(_stealth_vignette)
+	if _stealth_vignette.has_method("configure"):
+		_stealth_vignette.call(
+			"configure",
+			stealth_vignette_color,
+			stealth_vignette_edge_fraction,
+			stealth_vignette_min_thickness,
+			stealth_vignette_steps
+		)
 
 	_update_stealth_overlay_layout()
 	_set_stealth_overlay_visible(false)
@@ -127,23 +128,12 @@ func _update_stealth_overlay() -> void:
 
 
 func _update_stealth_overlay_layout() -> void:
-	if _stealth_tint == null:
+	if _stealth_vignette == null:
 		return
 
 	var viewport_size := get_viewport_rect().size
-	_stealth_tint.position = Vector2.ZERO
-	_stealth_tint.size = viewport_size
-
-	var edge_thickness := maxf(minf(viewport_size.x, viewport_size.y) * 0.12, 96.0)
-	if _stealth_edges.size() >= 4:
-		_stealth_edges[0].position = Vector2.ZERO
-		_stealth_edges[0].size = Vector2(viewport_size.x, edge_thickness)
-		_stealth_edges[1].position = Vector2(0.0, viewport_size.y - edge_thickness)
-		_stealth_edges[1].size = Vector2(viewport_size.x, edge_thickness)
-		_stealth_edges[2].position = Vector2.ZERO
-		_stealth_edges[2].size = Vector2(edge_thickness, viewport_size.y)
-		_stealth_edges[3].position = Vector2(viewport_size.x - edge_thickness, 0.0)
-		_stealth_edges[3].size = Vector2(edge_thickness, viewport_size.y)
+	_stealth_vignette.position = Vector2.ZERO
+	_stealth_vignette.size = viewport_size
 
 
 func _set_stealth_overlay_visible(is_visible: bool) -> void:
