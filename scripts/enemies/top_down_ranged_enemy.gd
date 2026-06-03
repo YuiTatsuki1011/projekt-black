@@ -221,6 +221,8 @@ func _configure_detection_bar() -> void:
 func _get_navigation_direction_to(target_position: Vector2, fallback_direction: Vector2) -> Vector2:
 	if not use_navigation or navigation_agent == null or not is_instance_valid(navigation_agent):
 		return fallback_direction
+	if _has_line_of_sight_to_position(target_position):
+		return fallback_direction
 
 	navigation_agent.target_position = target_position
 	var next_path_position := navigation_agent.get_next_path_position()
@@ -514,10 +516,17 @@ func _has_line_of_sight_to_target() -> bool:
 	if _target == null or not is_instance_valid(_target):
 		return false
 
+	return _has_line_of_sight_to_position(_target.global_position)
+
+
+func _has_line_of_sight_to_position(target_position: Vector2) -> bool:
+	if global_position.distance_squared_to(target_position) <= 1.0:
+		return true
+
 	var space_state := get_world_2d().direct_space_state
 	var query := PhysicsRayQueryParameters2D.new()
 	query.from = _get_vision_origin()
-	query.to = _target.global_position
+	query.to = target_position
 	query.collision_mask = line_of_sight_blocker_mask
 	query.exclude = [get_rid()]
 	query.collide_with_areas = false

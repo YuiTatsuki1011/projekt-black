@@ -5,14 +5,17 @@ const TOP_DOWN_ENEMY_GROUP := "top_down_enemies"
 const NOISE_RIPPLE_SCRIPT := preload("res://scripts/perception/noise_ripple.gd")
 
 @export var navigation_inner_margin: float = 24.0
-@export var navigation_obstacle_margin: float = 28.0
-@export var navigation_cell_size: float = 40.0
+@export var navigation_obstacle_margin: float = 12.0
+@export var navigation_cell_size: float = 20.0
 @export var enemy_debug_vision_visible: bool = true
 @export var enemy_debug_vision_toggle_key: Key = KEY_F2
+@export var debug_noise_visible: bool = false
+@export var debug_noise_toggle_key: Key = KEY_F3
 @export var stealth_overlay_color: Color = Color(0.12, 0.28, 0.42, 0.18)
 @export var stealth_vignette_color: Color = Color(0.0, 0.01, 0.025, 0.42)
 
 var _enemy_debug_vision_toggle_was_pressed: bool = false
+var _debug_noise_toggle_was_pressed: bool = false
 var _stealth_overlay_layer: CanvasLayer
 var _stealth_tint: ColorRect
 var _stealth_edges: Array[ColorRect] = []
@@ -30,11 +33,20 @@ func _process(_delta: float) -> void:
 	if toggle_pressed and not _enemy_debug_vision_toggle_was_pressed:
 		enemy_debug_vision_visible = not enemy_debug_vision_visible
 	_enemy_debug_vision_toggle_was_pressed = toggle_pressed
+
+	var noise_toggle_pressed := Input.is_key_pressed(debug_noise_toggle_key)
+	if noise_toggle_pressed and not _debug_noise_toggle_was_pressed:
+		debug_noise_visible = not debug_noise_visible
+	_debug_noise_toggle_was_pressed = noise_toggle_pressed
 	_update_stealth_overlay()
 
 
 func is_enemy_debug_vision_visible() -> bool:
 	return enemy_debug_vision_visible
+
+
+func is_debug_noise_visible() -> bool:
+	return debug_noise_visible
 
 
 func is_player_in_enemy_combat_state() -> bool:
@@ -52,7 +64,7 @@ func emit_noise_event(
 	noise_type: StringName = &"generic"
 ) -> void:
 	var resolved_radius := maxf(radius, 1.0)
-	if _is_player_stealth_mode_active():
+	if debug_noise_visible or _is_player_stealth_mode_active():
 		_spawn_noise_ripple(noise_position, resolved_radius, noise_type)
 
 	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
