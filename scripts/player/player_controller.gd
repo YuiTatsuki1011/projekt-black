@@ -25,6 +25,12 @@ enum MeleeState {
 	RECOVERY,
 }
 
+enum MovementMode {
+	SIDE_VIEW,
+	TOP_DOWN,
+}
+
+@export var movement_mode: MovementMode = MovementMode.SIDE_VIEW
 @export var walk_speed: float = 160.0
 @export var crouch_speed_multiplier: float = 0.45
 @export var sub_weapon_aim_speed_multiplier: float = 0.58
@@ -69,6 +75,9 @@ enum MeleeState {
 @export var afterimage_scene: PackedScene
 @export var player_bleed_vfx_scene: PackedScene
 @export var inventory_pose_tilt_degrees: float = -5.0
+@export var top_down_collision_size: Vector2 = Vector2(24.0, 24.0)
+@export var top_down_interaction_radius: float = 62.0
+@export var top_down_camera_zoom: Vector2 = Vector2(1.45, 1.45)
 
 @onready var body_root: Node2D = $VisualRoot/BodyRoot
 @onready var arm_rig: Node2D = $ArmRig
@@ -86,6 +95,7 @@ enum MeleeState {
 @onready var melee_root: Node2D = $MeleeRoot
 @onready var melee_hit_area: Area2D = $MeleeRoot/MeleeHitArea
 @onready var melee_slash_visual: Polygon2D = $MeleeRoot/SlashVisual
+@onready var camera: Camera2D = $Camera2D
 
 var current_ammo: int = 0
 var reserve_ammo: int = 0
@@ -118,6 +128,7 @@ var _stamina_recovery_delay_remaining: float = 0.0
 var _melee_state: MeleeState = MeleeState.READY
 var _melee_timer: float = 0.0
 var _melee_direction: int = 1
+var _melee_vector: Vector2 = Vector2.RIGHT
 var _melee_combo_step: int = 0
 var _current_melee_step: int = 0
 var _melee_combo_reset_remaining: float = 0.0
@@ -127,6 +138,7 @@ var _is_dodging: bool = false
 var _dodge_timer: float = 0.0
 var _dodge_cooldown_remaining: float = 0.0
 var _dodge_direction: int = 1
+var _dodge_vector: Vector2 = Vector2.RIGHT
 var _afterimage_timer: float = 0.0
 var _suppress_inventory_ammo_signal: bool = false
 var _has_ranged_weapon: bool = true
@@ -149,6 +161,7 @@ var _arm_rig_was_visible_before_inventory: bool = true
 func _ready() -> void:
 	if ProjectSettings.has_setting("physics/2d/default_gravity"):
 		_gravity = float(ProjectSettings.get_setting("physics/2d/default_gravity"))
+	_configure_movement_mode_nodes()
 	_apply_equipment_stats()
 	_sync_all_firearm_slot_caches()
 	_load_active_firearm_ammo()
@@ -171,6 +184,34 @@ func _ready() -> void:
 	ammo_changed.emit(current_ammo, reserve_ammo)
 	_emit_magazine_status_changed()
 	_emit_stamina_changed()
+
+
+func _configure_movement_mode_nodes() -> void:
+	if movement_mode != MovementMode.TOP_DOWN:
+		return
+
+	standing_collision.position = Vector2.ZERO
+	if standing_collision.shape is RectangleShape2D:
+		var standing_shape := standing_collision.shape.duplicate() as RectangleShape2D
+		standing_shape.size = top_down_collision_size
+		standing_collision.shape = standing_shape
+
+	crouching_collision.position = Vector2.ZERO
+	if crouching_collision.shape is RectangleShape2D:
+		var crouching_shape := crouching_collision.shape.duplicate() as RectangleShape2D
+		crouching_shape.size = top_down_collision_size * Vector2(0.85, 0.85)
+		crouching_collision.shape = crouching_shape
+
+	interaction_area.position = Vector2.ZERO
+	var interaction_shape_node := interaction_area.get_node_or_null("CollisionShape2D") as CollisionShape2D
+	if interaction_shape_node != null and interaction_shape_node.shape is CircleShape2D:
+		var interaction_shape := interaction_shape_node.shape.duplicate() as CircleShape2D
+		interaction_shape.radius = top_down_interaction_radius
+		interaction_shape_node.shape = interaction_shape
+
+	if camera != null:
+		camera.position = Vector2.ZERO
+		camera.zoom = top_down_camera_zoom
 
 
 func _apply_equipment_stats() -> void:
@@ -494,6 +535,14 @@ func _update_stamina(delta: float) -> void:
 
 
 func _handle_movement(delta: float) -> void:
+	if movement_mode == MovementMode.TOP_DOWN:
+		_handle_top_down_movement(delta)
+		return
+
+	_handle_side_view_movement(delta)
+
+
+func _handle_side_view_movement(delta: float) -> void:
 	var action_locked := _is_inventory_open or _is_dodging or _melee_state != MeleeState.READY
 	var input_axis: float = 0.0 if _is_inventory_open else Input.get_axis("move_left", "move_right")
 	var wants_crouch: bool = Input.is_action_pressed("crouch") and is_on_floor() and not action_locked
@@ -523,6 +572,32 @@ func _handle_movement(delta: float) -> void:
 
 	if Input.is_action_just_pressed("jump") and is_on_floor() and not _is_crouching and not action_locked:
 		velocity.y = jump_velocity
+
+	_damage_knockback_velocity = _damage_knockback_velocity.move_toward(Vector2.ZERO, damage_knockback_recovery * delta)
+
+
+func _handle_top_down_movement(delta: float) -> void:
+	var action_locked := _is_inventory_open or _is_dodging or _melee_state != MeleeState.READY
+	var input_vector := Vector2.ZERO if _is_inventory_open else _get_top_down_input_vector()
+	var wants_crouch := Input.is_action_pressed("crouch") and not action_locked
+	_set_crouching(wants_crouch)
+
+	var active_speed: float = walk_speed
+	if _is_crouching:
+		active_speed *= crouch_speed_multiplier
+	if _is_sub_weapon_aiming:
+		active_speed *= sub_weapon_aim_speed_multiplier
+	if _is_field_magazine_loading:
+		active_speed *= field_load_speed_multiplier
+
+	if _is_dodging:
+		velocity = _dodge_vector * dodge_speed + _damage_knockback_velocity
+	elif _melee_state == MeleeState.LUNGE:
+		velocity = _melee_vector * melee_lunge_speed + _damage_knockback_velocity
+	elif _melee_state == MeleeState.STRIKE or _melee_state == MeleeState.RECOVERY:
+		velocity = _damage_knockback_velocity
+	else:
+		velocity = input_vector * active_speed + _damage_knockback_velocity
 
 	_damage_knockback_velocity = _damage_knockback_velocity.move_toward(Vector2.ZERO, damage_knockback_recovery * delta)
 
@@ -916,7 +991,10 @@ func _update_dodge(delta: float) -> void:
 
 
 func _try_start_dodge() -> void:
-	if _is_dodging or _dodge_cooldown_remaining > 0.0 or not is_on_floor():
+	if _is_dodging or _dodge_cooldown_remaining > 0.0:
+		return
+
+	if movement_mode != MovementMode.TOP_DOWN and not is_on_floor():
 		return
 
 	if _melee_state == MeleeState.STRIKE:
@@ -926,6 +1004,7 @@ func _try_start_dodge() -> void:
 		_cancel_melee_attack()
 
 	_dodge_direction = _get_action_direction()
+	_dodge_vector = _get_action_vector()
 	_is_dodging = true
 	_is_sub_weapon_aiming = false
 	_sub_weapon_fire_was_pressed = false
@@ -952,6 +1031,32 @@ func _get_action_direction() -> int:
 		return -1
 
 	return _facing
+
+
+func _get_action_vector() -> Vector2:
+	if movement_mode != MovementMode.TOP_DOWN:
+		return Vector2(float(_get_action_direction()), 0.0)
+
+	var input_vector := _get_top_down_input_vector()
+	if input_vector != Vector2.ZERO:
+		return input_vector
+
+	var mouse_vector := get_global_mouse_position() - global_position
+	if mouse_vector.length_squared() > 0.01:
+		return mouse_vector.normalized()
+
+	return Vector2(float(_facing), 0.0)
+
+
+func _get_top_down_input_vector() -> Vector2:
+	var input_vector := Vector2(
+		Input.get_axis("move_left", "move_right"),
+		Input.get_axis("move_up", "move_down")
+	)
+	if input_vector.length_squared() <= 0.01:
+		return Vector2.ZERO
+
+	return input_vector.normalized()
 
 
 func _spawn_afterimage() -> void:
@@ -990,8 +1095,7 @@ func _update_sub_weapon_aiming() -> void:
 	)
 
 	if should_aim:
-		_melee_direction = _get_action_direction()
-		_set_facing(_melee_direction)
+		_set_melee_action_direction()
 
 	if _is_sub_weapon_aiming == should_aim:
 		if _is_sub_weapon_aiming:
@@ -1003,7 +1107,7 @@ func _update_sub_weapon_aiming() -> void:
 
 
 func _try_start_melee_attack() -> void:
-	if not is_on_floor():
+	if movement_mode != MovementMode.TOP_DOWN and not is_on_floor():
 		return
 
 	if not _can_use_melee_stamina():
@@ -1015,9 +1119,8 @@ func _try_start_melee_attack() -> void:
 	_melee_combo_reset_remaining = melee_combo_reset_time
 	_queued_melee_attack = false
 	_melee_hit_bodies.clear()
-	_melee_direction = _get_action_direction()
+	_set_melee_action_direction()
 	_set_crouching(false)
-	_set_facing(_melee_direction)
 	_consume_stamina(melee_stamina_cost)
 	_is_sub_weapon_aiming = false
 	_set_sub_weapon_aim_visual(false)
@@ -1107,7 +1210,7 @@ func _apply_melee_damage() -> void:
 
 		_melee_hit_bodies.append(body)
 		if body.has_method("apply_hit_reaction"):
-			body.call("apply_hit_reaction", Vector2(_melee_direction, 0.0), damage, hit_position)
+			body.call("apply_hit_reaction", _melee_vector, damage, hit_position)
 		health_node.apply_damage(damage)
 
 
@@ -1147,10 +1250,31 @@ func _can_use_melee_stamina() -> bool:
 	return _has_melee_weapon and not is_stamina_overheated and current_stamina >= melee_min_stamina_to_use
 
 
+func _set_melee_action_direction() -> void:
+	_melee_vector = _get_action_vector()
+	if absf(_melee_vector.x) > 0.01:
+		_melee_direction = int(signf(_melee_vector.x))
+		_set_facing(_melee_direction)
+	elif movement_mode != MovementMode.TOP_DOWN:
+		_set_facing(_melee_direction)
+
+	_apply_melee_visual_transform()
+
+
+func _apply_melee_visual_transform() -> void:
+	if movement_mode == MovementMode.TOP_DOWN:
+		melee_root.rotation = _melee_vector.angle()
+		melee_root.scale = Vector2.ONE
+		return
+
+	melee_root.rotation = 0.0
+	melee_root.scale = Vector2(float(_melee_direction), 1.0)
+
+
 func _set_melee_visual(visible: bool) -> void:
 	melee_root.visible = visible
 	melee_hit_area.monitoring = visible
-	melee_root.scale.x = float(_melee_direction)
+	_apply_melee_visual_transform()
 	melee_slash_visual.visible = visible
 	if visible:
 		melee_slash_visual.color = Color(0.72, 0.62, 0.42, 0.45)
@@ -1162,7 +1286,7 @@ func _set_sub_weapon_aim_visual(visible: bool) -> void:
 
 	melee_root.visible = visible
 	melee_hit_area.monitoring = false
-	melee_root.scale.x = float(_melee_direction)
+	_apply_melee_visual_transform()
 	melee_slash_visual.visible = visible
 	melee_slash_visual.color = Color(0.72, 0.72, 0.62, 0.28)
 
@@ -1825,6 +1949,10 @@ func apply_damage_reaction(direction: Vector2, _damage: int, _source_position: V
 	if knockback_direction == Vector2.ZERO:
 		knockback_direction = Vector2.RIGHT
 	_pending_damage_direction = knockback_direction
+
+	if movement_mode == MovementMode.TOP_DOWN:
+		_damage_knockback_velocity = knockback_direction * damage_knockback_strength
+		return
 
 	_damage_knockback_velocity.x = knockback_direction.x * damage_knockback_strength
 	if is_on_floor():

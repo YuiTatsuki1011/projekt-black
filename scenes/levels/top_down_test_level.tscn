@@ -1,0 +1,187 @@
+[gd_scene load_steps=16 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
+[ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
+[ext_resource type="PackedScene" path="res://scenes/ui/ammo_hud.tscn" id="3_ammo_hud"]
+[ext_resource type="PackedScene" path="res://scenes/ui/stamina_hud.tscn" id="4_stamina_hud"]
+[ext_resource type="PackedScene" path="res://scenes/ui/inventory_screen.tscn" id="5_inventory_screen"]
+[ext_resource type="PackedScene" path="res://scenes/ui/death_screen.tscn" id="6_death_screen"]
+[ext_resource type="PackedScene" path="res://scenes/interaction/spawn_button.tscn" id="7_spawn_button"]
+[ext_resource type="PackedScene" path="res://scenes/enemies/training_target.tscn" id="8_training_target"]
+[ext_resource type="PackedScene" path="res://scenes/interaction/item_grant_button.tscn" id="9_item_grant_button"]
+[ext_resource type="PackedScene" path="res://scenes/interaction/item_container.tscn" id="10_item_container"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_horizontal_wall"]
+size = Vector2(960, 32)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_vertical_wall"]
+size = Vector2(32, 620)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_crate_wide"]
+size = Vector2(128, 54)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_crate_tall"]
+size = Vector2(64, 130)
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_cover"]
+size = Vector2(180, 36)
+
+[node name="TopDownTestLevel" type="Node2D"]
+
+[node name="FloorVisual" type="Polygon2D" parent="."]
+color = Color(0.19, 0.19, 0.185, 1)
+polygon = PackedVector2Array(-80, -80, 1040, -80, 1040, 740, -80, 740)
+
+[node name="GridLines" type="Node2D" parent="."]
+
+[node name="HorizontalGuideA" type="Line2D" parent="GridLines"]
+points = PackedVector2Array(-80, 160, 1040, 160)
+width = 1.0
+default_color = Color(0.245, 0.245, 0.235, 0.55)
+
+[node name="HorizontalGuideB" type="Line2D" parent="GridLines"]
+points = PackedVector2Array(-80, 360, 1040, 360)
+width = 1.0
+default_color = Color(0.245, 0.245, 0.235, 0.55)
+
+[node name="HorizontalGuideC" type="Line2D" parent="GridLines"]
+points = PackedVector2Array(-80, 560, 1040, 560)
+width = 1.0
+default_color = Color(0.245, 0.245, 0.235, 0.55)
+
+[node name="VerticalGuideA" type="Line2D" parent="GridLines"]
+points = PackedVector2Array(200, -80, 200, 740)
+width = 1.0
+default_color = Color(0.245, 0.245, 0.235, 0.55)
+
+[node name="VerticalGuideB" type="Line2D" parent="GridLines"]
+points = PackedVector2Array(480, -80, 480, 740)
+width = 1.0
+default_color = Color(0.245, 0.245, 0.235, 0.55)
+
+[node name="VerticalGuideC" type="Line2D" parent="GridLines"]
+points = PackedVector2Array(760, -80, 760, 740)
+width = 1.0
+default_color = Color(0.245, 0.245, 0.235, 0.55)
+
+[node name="World" type="Node2D" parent="."]
+
+[node name="TopWall" type="StaticBody2D" parent="World"]
+position = Vector2(480, -16)
+collision_layer = 1
+collision_mask = 1
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="World/TopWall"]
+shape = SubResource("RectangleShape2D_horizontal_wall")
+
+[node name="Visual" type="Polygon2D" parent="World/TopWall"]
+color = Color(0.095, 0.095, 0.1, 1)
+polygon = PackedVector2Array(-480, -16, 480, -16, 480, 16, -480, 16)
+
+[node name="BottomWall" type="StaticBody2D" parent="World"]
+position = Vector2(480, 656)
+collision_layer = 1
+collision_mask = 1
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="World/BottomWall"]
+shape = SubResource("RectangleShape2D_horizontal_wall")
+
+[node name="Visual" type="Polygon2D" parent="World/BottomWall"]
+color = Color(0.095, 0.095, 0.1, 1)
+polygon = PackedVector2Array(-480, -16, 480, -16, 480, 16, -480, 16)
+
+[node name="LeftWall" type="StaticBody2D" parent="World"]
+position = Vector2(-16, 320)
+collision_layer = 1
+collision_mask = 1
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="World/LeftWall"]
+shape = SubResource("RectangleShape2D_vertical_wall")
+
+[node name="Visual" type="Polygon2D" parent="World/LeftWall"]
+color = Color(0.095, 0.095, 0.1, 1)
+polygon = PackedVector2Array(-16, -310, 16, -310, 16, 310, -16, 310)
+
+[node name="RightWall" type="StaticBody2D" parent="World"]
+position = Vector2(976, 320)
+collision_layer = 1
+collision_mask = 1
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="World/RightWall"]
+shape = SubResource("RectangleShape2D_vertical_wall")
+
+[node name="Visual" type="Polygon2D" parent="World/RightWall"]
+color = Color(0.095, 0.095, 0.1, 1)
+polygon = PackedVector2Array(-16, -310, 16, -310, 16, 310, -16, 310)
+
+[node name="CrateWide" type="StaticBody2D" parent="World"]
+position = Vector2(520, 250)
+collision_layer = 1
+collision_mask = 1
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="World/CrateWide"]
+shape = SubResource("RectangleShape2D_crate_wide")
+
+[node name="Visual" type="Polygon2D" parent="World/CrateWide"]
+color = Color(0.15, 0.13, 0.11, 1)
+polygon = PackedVector2Array(-64, -27, 64, -27, 64, 27, -64, 27)
+
+[node name="CrateTall" type="StaticBody2D" parent="World"]
+position = Vector2(700, 432)
+collision_layer = 1
+collision_mask = 1
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="World/CrateTall"]
+shape = SubResource("RectangleShape2D_crate_tall")
+
+[node name="Visual" type="Polygon2D" parent="World/CrateTall"]
+color = Color(0.13, 0.12, 0.12, 1)
+polygon = PackedVector2Array(-32, -65, 32, -65, 32, 65, -32, 65)
+
+[node name="Cover" type="StaticBody2D" parent="World"]
+position = Vector2(330, 468)
+collision_layer = 1
+collision_mask = 1
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="World/Cover"]
+shape = SubResource("RectangleShape2D_cover")
+
+[node name="Visual" type="Polygon2D" parent="World/Cover"]
+color = Color(0.105, 0.115, 0.125, 1)
+polygon = PackedVector2Array(-90, -18, 90, -18, 90, 18, -90, 18)
+
+[node name="Player" parent="." instance=ExtResource("1_player")]
+position = Vector2(220, 330)
+movement_mode = 1
+
+[node name="Enemies" type="Node2D" parent="."]
+
+[node name="TargetButton" parent="." instance=ExtResource("7_spawn_button")]
+position = Vector2(162, 142)
+spawn_scene = ExtResource("8_training_target")
+button_label = "TARGET"
+
+[node name="AmmoButton" parent="." instance=ExtResource("9_item_grant_button")]
+position = Vector2(318, 142)
+button_label = "AMMO +12"
+quantity = 12
+
+[node name="HeavyPistolButton" parent="." instance=ExtResource("9_item_grant_button")]
+position = Vector2(474, 142)
+item_id = &"heavy_pistol"
+button_label = "HEAVY PISTOL"
+quantity = 1
+
+[node name="LootBox" parent="." instance=ExtResource("10_item_container")]
+position = Vector2(780, 170)
+container_label = "LOOT BOX"
+
+[node name="Crosshair" parent="." instance=ExtResource("2_crosshair")]
+
+[node name="AmmoHud" parent="." instance=ExtResource("3_ammo_hud")]
+
+[node name="StaminaHud" parent="." instance=ExtResource("4_stamina_hud")]
+
+[node name="InventoryScreen" parent="." instance=ExtResource("5_inventory_screen")]
+
+[node name="DeathScreen" parent="." instance=ExtResource("6_death_screen")]
