@@ -574,7 +574,7 @@ func _update_debug_vision() -> void:
 	if _vision_cone == null:
 		return
 
-	_vision_cone.visible = debug_vision_visible and _should_show_debug_vision()
+	_vision_cone.visible = _is_debug_vision_enabled() and _should_show_debug_vision()
 	if not _vision_cone.visible:
 		return
 
@@ -587,6 +587,17 @@ func _update_debug_vision() -> void:
 		var angle := -half_angle + half_angle * 2.0 * ratio
 		points.append(_get_clipped_debug_vision_point(_facing_direction.normalized().rotated(angle), aggro_range))
 	_vision_cone.polygon = points
+
+
+func _is_debug_vision_enabled() -> bool:
+	if not debug_vision_visible:
+		return false
+
+	var current_scene := get_tree().current_scene
+	if current_scene != null and current_scene.has_method("is_enemy_debug_vision_visible"):
+		return bool(current_scene.call("is_enemy_debug_vision_visible"))
+
+	return true
 
 
 func _should_show_debug_vision() -> bool:

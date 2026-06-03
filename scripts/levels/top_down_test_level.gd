@@ -4,10 +4,25 @@ class_name TopDownTestLevel
 @export var navigation_inner_margin: float = 24.0
 @export var navigation_obstacle_margin: float = 28.0
 @export var navigation_cell_size: float = 40.0
+@export var enemy_debug_vision_visible: bool = true
+@export var enemy_debug_vision_toggle_key: Key = KEY_F2
+
+var _enemy_debug_vision_toggle_was_pressed: bool = false
 
 
 func _ready() -> void:
 	_build_test_navigation_region()
+
+
+func _process(_delta: float) -> void:
+	var toggle_pressed := Input.is_key_pressed(enemy_debug_vision_toggle_key)
+	if toggle_pressed and not _enemy_debug_vision_toggle_was_pressed:
+		enemy_debug_vision_visible = not enemy_debug_vision_visible
+	_enemy_debug_vision_toggle_was_pressed = toggle_pressed
+
+
+func is_enemy_debug_vision_visible() -> bool:
+	return enemy_debug_vision_visible
 
 
 func _build_test_navigation_region() -> void:
