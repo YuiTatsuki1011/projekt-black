@@ -28,6 +28,11 @@ func show_sighting(marker_position: Vector2) -> void:
 	visible = true
 
 
+func hide_sighting() -> void:
+	_hide_timer = 0.0
+	visible = false
+
+
 func _build_visual() -> void:
 	if get_child_count() > 0:
 		return
