@@ -62,6 +62,10 @@ enum AwarenessState {
 @export var corner_clearing_sweep_speed: float = 4.8
 @export var search_probe_radius: float = 96.0
 @export var search_probe_investigation_time: float = 0.9
+@export var group_tactics_enabled: bool = true
+@export var group_tactic_range: float = 320.0
+@export var flank_offset_distance: float = 96.0
+@export var rear_pressure_offset_distance: float = 128.0
 @export var debug_vision_visible: bool = true
 @export var debug_vision_focus_distance: float = 440.0
 @export var debug_vision_segments: int = 24
@@ -192,7 +196,8 @@ func _update_velocity(delta: float) -> void:
 
 	var visible_target := _is_target_visible()
 	var target_position := _target.global_position if visible_target else _last_seen_target_position
-	var to_target := target_position - global_position
+	var movement_position := _get_group_pursuit_position(target_position)
+	var to_target := movement_position - global_position
 	var target_distance := to_target.length()
 	if target_distance <= 0.01:
 		return
@@ -201,11 +206,11 @@ func _update_velocity(delta: float) -> void:
 	if visible_target and target_distance < retreat_range:
 		velocity -= target_direction * move_speed
 	elif visible_target and target_distance > preferred_range:
-		velocity += _get_navigation_direction_to(target_position, target_direction) * move_speed
+		velocity += _get_navigation_direction_to(movement_position, target_direction) * move_speed
 	elif not visible_target and target_distance > 24.0:
-		var move_direction := _get_navigation_direction_to(target_position, target_direction)
+		var move_direction := _get_navigation_direction_to(movement_position, target_direction)
 		velocity += move_direction * move_speed
-		if _has_line_of_sight_to_position(target_position):
+		if _has_line_of_sight_to_position(movement_position):
 			_set_aim_direction(target_direction)
 		else:
 			_turn_aim_toward(_get_corner_clearing_direction(move_direction, target_direction, delta), delta)
@@ -280,6 +285,60 @@ func _get_navigation_direction_to(target_position: Vector2, fallback_direction: 
 		return fallback_direction
 
 	return to_next.normalized()
+
+
+func _get_group_pursuit_position(base_position: Vector2) -> Vector2:
+	var role_index := _get_group_tactic_role_index()
+	if role_index < 0:
+		return base_position
+
+	var approach_direction := (base_position - global_position).normalized()
+	if approach_direction.length_squared() <= 0.01:
+		approach_direction = _facing_direction.normalized()
+	if approach_direction.length_squared() <= 0.01:
+		return base_position
+
+	var side_direction := Vector2(-approach_direction.y, approach_direction.x)
+	match role_index:
+		1:
+			return base_position + side_direction * flank_offset_distance
+		2:
+			return base_position - side_direction * flank_offset_distance
+		3:
+			return base_position + approach_direction * rear_pressure_offset_distance
+
+	return base_position
+
+
+func _get_group_tactic_role_index() -> int:
+	if not group_tactics_enabled or not _has_last_seen_target:
+		return -1
+
+	var active_count := 0
+	var lower_id_count := 0
+	var self_id := get_instance_id()
+	for enemy in get_tree().get_nodes_in_group(TOP_DOWN_ENEMY_GROUP):
+		if enemy == null or not is_instance_valid(enemy):
+			continue
+		if not enemy is Node2D:
+			continue
+
+		var enemy_2d := enemy as Node2D
+		if global_position.distance_squared_to(enemy_2d.global_position) > group_tactic_range * group_tactic_range:
+			continue
+		if not enemy.has_method("has_active_player_sighting"):
+			continue
+		if not bool(enemy.call("has_active_player_sighting")):
+			continue
+
+		active_count += 1
+		if enemy.get_instance_id() < self_id:
+			lower_id_count += 1
+
+	if active_count <= 1:
+		return -1
+
+	return lower_id_count % 4
 
 
 func _update_shoot_state(delta: float) -> void:
