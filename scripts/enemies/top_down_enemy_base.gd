@@ -710,11 +710,18 @@ func _on_died() -> void:
 	_is_dead = true
 	collision_layer = 0
 	collision_mask = 0
+	_notify_run_enemy_defeated()
 	_notify_mission_enemy_defeated()
 	_enemy_died()
 	_spawn_vfx(death_vfx_scene, global_position)
 	_spawn_loot_container()
 	queue_free()
+
+
+func _notify_run_enemy_defeated() -> void:
+	var current_scene := get_tree().current_scene
+	if current_scene != null and current_scene.has_method("notify_enemy_defeated"):
+		current_scene.call("notify_enemy_defeated", self)
 
 
 func _notify_mission_enemy_defeated() -> void:

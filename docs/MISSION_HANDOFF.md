@@ -34,3 +34,15 @@
   - `QUEST OBJECTIVE COMPLETE` if the active objective was completed.
   - `NO QUEST PROGRESS` if the player extracted without completing it.
 - `extraction_requires_objective` remains as an exported test option for special locked-extraction experiments, but its default is `false`.
+
+## 2026-06-04: Run Result Screen V1
+
+- Added `RunResultScreen` for extraction and failure summaries.
+- The top-down test level now tracks:
+  - elapsed run time
+  - defeated top-down enemies
+  - quest objective completion
+  - current backpack item stacks and item units
+- Extraction success shows secured item counts.
+- Player death calls `request_run_failure(...)`; the result screen shows `RUN FAILED`, no secured items, and the carried items as lost.
+- This is display-only for now. There is no persistent stash, reward payout, quest database, or item loss mutation yet.

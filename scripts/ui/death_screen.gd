@@ -14,4 +14,9 @@ func _ready() -> void:
 
 
 func _on_player_died() -> void:
+	var current_scene := get_tree().current_scene
+	if current_scene != null and current_scene.has_method("request_run_failure"):
+		current_scene.call("request_run_failure", self)
+		return
+
 	root.visible = true

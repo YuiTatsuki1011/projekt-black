@@ -35,16 +35,22 @@ var _stealth_overlay_layer: CanvasLayer
 var _stealth_vignette: Control
 var _player: Node
 var _mission_hud: MissionStatusHud
+var _run_result_screen: RunResultScreen
 var _extraction_point: Node
 var _mission_objective_complete: bool = false
 var _mission_complete: bool = false
+var _run_extracted: bool = false
+var _run_start_msec: int = 0
+var _enemies_defeated: int = 0
 var _mission_kill_count: int = 0
 
 
 func _ready() -> void:
 	_build_test_navigation_region()
+	_run_start_msec = Time.get_ticks_msec()
 	_player = get_node_or_null("Player")
 	_mission_hud = get_node_or_null("MissionStatusHud") as MissionStatusHud
+	_run_result_screen = get_node_or_null("RunResultScreen") as RunResultScreen
 	_extraction_point = get_node_or_null("ExtractionPoint")
 	_create_stealth_overlay()
 	_update_mission_display()
@@ -96,6 +102,13 @@ func emit_noise_event(
 			enemy.call("receive_noise_event", noise_position, resolved_radius, source, noise_type)
 
 
+func notify_enemy_defeated(_enemy: Node = null) -> void:
+	if _mission_complete:
+		return
+
+	_enemies_defeated += 1
+
+
 func complete_mission_objective(objective_id: StringName, _source: Node = null) -> bool:
 	if _mission_complete:
 		return false
@@ -140,12 +153,15 @@ func request_extraction(_source: Node = null) -> bool:
 		show_mission_message("Extraction locked. Complete the objective first.")
 		return false
 
-	_mission_complete = true
-	_update_mission_display()
-	if _mission_hud != null:
-		var subtitle := "QUEST OBJECTIVE COMPLETE" if _mission_objective_complete else "NO QUEST PROGRESS"
-		_mission_hud.show_complete("EXTRACTION COMPLETE", subtitle)
+	_finish_run(true)
 	return true
+
+
+func request_run_failure(_source: Node = null) -> void:
+	if _mission_complete:
+		return
+
+	_finish_run(false)
 
 
 func show_mission_message(message: String) -> void:
@@ -157,7 +173,7 @@ func _update_mission_display() -> void:
 	if _mission_hud != null:
 		if _mission_complete:
 			_mission_hud.set_objective_text("OBJECTIVE COMPLETE" if _mission_objective_complete else "OBJECTIVE INCOMPLETE")
-			_mission_hud.set_status_text("EXTRACTED")
+			_mission_hud.set_status_text("EXTRACTED" if _run_extracted else "KIA")
 		elif _mission_objective_complete:
 			_mission_hud.set_objective_text("OBJECTIVE: %s" % mission_extract_text.to_upper())
 			_mission_hud.set_status_text("EXTRACT WHEN READY")
@@ -175,6 +191,69 @@ func _update_mission_display() -> void:
 	if _extraction_point != null and _extraction_point.has_method("set_extraction_ready"):
 		var extraction_ready := not _mission_complete and (not extraction_requires_objective or _mission_objective_complete)
 		_extraction_point.call("set_extraction_ready", extraction_ready)
+
+
+func _finish_run(extracted: bool) -> void:
+	_mission_complete = true
+	_run_extracted = extracted
+	_update_mission_display()
+
+	var title: String = "EXTRACTION COMPLETE" if extracted else "RUN FAILED"
+	var subtitle: String = "QUEST OBJECTIVE COMPLETE" if _mission_objective_complete else "NO QUEST PROGRESS"
+	var stats: Dictionary = _build_run_result_stats(extracted, subtitle)
+	if _run_result_screen != null:
+		_run_result_screen.show_result(title, subtitle, stats)
+	elif _mission_hud != null:
+		_mission_hud.show_complete(title, subtitle)
+
+
+func _build_run_result_stats(extracted: bool, quest_status: String) -> Dictionary:
+	var inventory_summary: Dictionary = _get_player_inventory_summary()
+	return {
+		"extracted": extracted,
+		"elapsed_seconds": _get_run_elapsed_seconds(),
+		"enemies_killed": _enemies_defeated,
+		"quest_status": quest_status,
+		"item_stacks": int(inventory_summary.get("stacks", 0)),
+		"item_units": int(inventory_summary.get("units", 0)),
+	}
+
+
+func _get_run_elapsed_seconds() -> int:
+	if _run_start_msec <= 0:
+		return 0
+
+	return maxi(0, floori(float(Time.get_ticks_msec() - _run_start_msec) / 1000.0))
+
+
+func _get_player_inventory_summary() -> Dictionary:
+	var summary: Dictionary = {
+		"stacks": 0,
+		"units": 0,
+	}
+	var inventory: Node = _get_player_inventory()
+	if inventory == null or not inventory.has_method("get_entries"):
+		return summary
+
+	var entries: Array = inventory.call("get_entries")
+	summary["stacks"] = entries.size()
+	var unit_count: int = 0
+	for entry in entries:
+		if not entry is Dictionary:
+			continue
+		var entry_dictionary: Dictionary = entry
+		unit_count += maxi(int(entry_dictionary.get("quantity", 1)), 1)
+	summary["units"] = unit_count
+	return summary
+
+
+func _get_player_inventory() -> Node:
+	if _player == null or not is_instance_valid(_player):
+		_player = get_node_or_null("Player")
+	if _player == null:
+		return null
+
+	return _player.get_node_or_null("Inventory")
 
 
 func _is_player_stealth_mode_active() -> bool:

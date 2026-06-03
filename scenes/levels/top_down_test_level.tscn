@@ -1,4 +1,4 @@
-[gd_scene load_steps=21 format=3]
+[gd_scene load_steps=22 format=3]
 
 [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
 [ext_resource type="PackedScene" path="res://scenes/ui/crosshair.tscn" id="2_crosshair"]
@@ -14,6 +14,7 @@
 [ext_resource type="PackedScene" path="res://scenes/enemies/top_down_ranged_enemy.tscn" id="12_top_down_ranged"]
 [ext_resource type="Script" path="res://scripts/levels/top_down_test_level.gd" id="13_top_down_level"]
 [ext_resource type="PackedScene" path="res://scenes/ui/mission_status_hud.tscn" id="14_mission_hud"]
+[ext_resource type="PackedScene" path="res://scenes/ui/run_result_screen.tscn" id="15_run_result"]
 [ext_resource type="PackedScene" path="res://scenes/interaction/extraction_point.tscn" id="16_extraction_point"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_horizontal_wall"]
@@ -214,3 +215,5 @@ position = Vector2(92, 548)
 [node name="DeathScreen" parent="." instance=ExtResource("6_death_screen")]
 
 [node name="MissionStatusHud" parent="." instance=ExtResource("14_mission_hud")]
+
+[node name="RunResultScreen" parent="." instance=ExtResource("15_run_result")]
