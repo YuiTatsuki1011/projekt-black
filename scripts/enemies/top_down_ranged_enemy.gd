@@ -38,6 +38,8 @@ enum ShootState {
 @export var alert_share_delay: float = 0.35
 @export var investigation_time: float = 1.35
 @export var debug_vision_visible: bool = true
+@export var debug_vision_focus_distance: float = 440.0
+@export var debug_vision_segments: int = 24
 @export var debug_last_seen_marker_visible: bool = true
 @export var hit_vfx_scene: PackedScene
 @export var death_vfx_scene: PackedScene
@@ -627,18 +629,57 @@ func _update_debug_vision() -> void:
 	if _vision_cone == null:
 		return
 
-	_vision_cone.visible = debug_vision_visible
-	if not debug_vision_visible:
+	_vision_cone.visible = debug_vision_visible and _should_show_debug_vision()
+	if not _vision_cone.visible:
 		return
 
+	_vision_cone.color = _get_debug_vision_color()
 	var points := PackedVector2Array([Vector2.ZERO])
 	var half_angle := deg_to_rad(view_angle_degrees * 0.5)
-	var segments := 12
+	var segments := maxi(debug_vision_segments, 4)
 	for index in range(segments + 1):
 		var ratio := float(index) / float(segments)
 		var angle := -half_angle + half_angle * 2.0 * ratio
-		points.append(_facing_direction.normalized().rotated(angle) * detection_range)
+		points.append(_get_clipped_debug_vision_point(_facing_direction.normalized().rotated(angle), detection_range))
 	_vision_cone.polygon = points
+
+
+func _should_show_debug_vision() -> bool:
+	if _target == null or not is_instance_valid(_target):
+		return _has_last_seen_target
+	if _has_last_seen_target or _detection_progress > 0.01:
+		return true
+
+	return global_position.distance_squared_to(_target.global_position) <= debug_vision_focus_distance * debug_vision_focus_distance
+
+
+func _get_debug_vision_color() -> Color:
+	if _is_target_visible():
+		return Color(1.0, 0.14, 0.08, 0.2)
+	if _detection_progress > 0.01:
+		return Color(1.0, 0.74, 0.1, 0.12 + 0.12 * _detection_progress)
+	if _has_last_seen_target:
+		return Color(0.42, 0.62, 1.0, 0.09)
+
+	return Color(0.9, 0.52, 0.36, 0.045)
+
+
+func _get_clipped_debug_vision_point(direction: Vector2, vision_range: float) -> Vector2:
+	var origin := _get_vision_origin()
+	var end_position := origin + direction.normalized() * vision_range
+	var space_state := get_world_2d().direct_space_state
+	var query := PhysicsRayQueryParameters2D.new()
+	query.from = origin
+	query.to = end_position
+	query.collision_mask = line_of_sight_blocker_mask
+	query.exclude = [get_rid()]
+	query.collide_with_areas = false
+	query.collide_with_bodies = true
+	var hit := space_state.intersect_ray(query)
+	if hit.has("position"):
+		return to_local(hit.get("position", end_position))
+
+	return to_local(end_position)
 
 
 func _update_detection_bar() -> void:
