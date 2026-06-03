@@ -106,6 +106,9 @@ var _hover_equipment_slot: StringName = &""
 var _is_open: bool = false
 var _camera: Camera2D
 var _camera_tween: Tween
+var _camera_rest_position: Vector2 = Vector2.ZERO
+var _camera_rest_zoom: Vector2 = Vector2.ONE
+var _camera_has_rest_state: bool = false
 var _damage_edge_flash: ColorRect
 var _damage_flash_tween: Tween
 var _gear_panel: Panel
@@ -748,14 +751,29 @@ func _set_inventory_camera(is_open: bool) -> void:
 	if _camera == null:
 		return
 
+	if is_open and not _camera_has_rest_state:
+		_camera_rest_position = _camera.position
+		_camera_rest_zoom = _camera.zoom
+		_camera_has_rest_state = true
+
 	if _camera_tween != null:
 		_camera_tween.kill()
 
-	var target_position := inventory_camera_position if is_open else normal_camera_position
-	var target_zoom := inventory_camera_zoom if is_open else normal_camera_zoom
+	var target_position := inventory_camera_position
+	var target_zoom := inventory_camera_zoom
+	if not is_open:
+		target_position = _camera_rest_position if _camera_has_rest_state else normal_camera_position
+		target_zoom = _camera_rest_zoom if _camera_has_rest_state else normal_camera_zoom
+
 	_camera_tween = create_tween()
 	_camera_tween.tween_property(_camera, "position", target_position, camera_transition_time)
 	_camera_tween.parallel().tween_property(_camera, "zoom", target_zoom, camera_transition_time)
+	if not is_open:
+		_camera_tween.finished.connect(_clear_camera_rest_state, CONNECT_ONE_SHOT)
+
+
+func _clear_camera_rest_state() -> void:
+	_camera_has_rest_state = false
 
 
 func _build_grid_cells() -> void:

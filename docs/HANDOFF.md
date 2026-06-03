@@ -118,6 +118,10 @@
 - 見下ろし型プロトタイプ `scenes/levels/top_down_test_level.tscn` を追加し、デフォルト起動シーンに設定した。旧横スクロールの `scenes/levels/test_level.tscn` は削除していない。
 - `PlayerController` に `movement_mode` を追加した。`SIDE_VIEW` では従来の重力/ジャンプ式、`TOP_DOWN` ではWASD上下左右移動、Cしゃがみ、任意方向Shiftステップ、任意方向サブ武器踏み込みを使う。
 - Spaceキーはプロトタイプ方針に合わせて未割り当てにした。今後の用途が決まるまで予約扱い。
+- トップダウン用の接近戦敵 `scenes/enemies/top_down_chaser_enemy.tscn` と `scripts/enemies/top_down_chaser_enemy.gd` を追加した。2D平面でプレイヤーを追跡し、近距離で攻撃し、死亡時に `pistol_ammo` を落とす。
+- `top_down_test_level.tscn` にトップダウンチェイサーを2体配置し、追加出現用の `CHASER` ボタンも置いた。
+- トップダウンテストのプレイヤー移動速度を30%上げ、`walk_speed = 208.0` にした。
+- インベントリを開閉した後のカメラ復帰は固定値ではなく、開く直前のカメラ位置/ズームを記録して戻す方式へ変更した。トップダウンと旧横スクロールの両方で視点設定を戻しやすくするため。
 
 ## 次にやること
 

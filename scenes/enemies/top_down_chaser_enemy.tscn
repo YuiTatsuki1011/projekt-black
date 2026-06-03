@@ -1,0 +1,57 @@
+[gd_scene load_steps=9 format=3]
+
+[ext_resource type="Script" path="res://scripts/enemies/top_down_chaser_enemy.gd" id="1_chaser"]
+[ext_resource type="Script" path="res://scripts/combat/health.gd" id="2_health"]
+[ext_resource type="PackedScene" path="res://scenes/ui/health_indicator.tscn" id="3_health_indicator"]
+[ext_resource type="PackedScene" path="res://scenes/vfx/hit_burst.tscn" id="4_hit_burst"]
+[ext_resource type="PackedScene" path="res://scenes/vfx/death_burst.tscn" id="5_death_burst"]
+[ext_resource type="Script" path="res://scripts/enemies/loot_dropper.gd" id="6_loot_dropper"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_body"]
+radius = 16.0
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_damage"]
+radius = 26.0
+
+[node name="TopDownChaserEnemy" type="CharacterBody2D"]
+collision_layer = 8
+collision_mask = 3
+script = ExtResource("1_chaser")
+hit_vfx_scene = ExtResource("4_hit_burst")
+death_vfx_scene = ExtResource("5_death_burst")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("CircleShape2D_body")
+
+[node name="BodyVisual" type="Polygon2D" parent="."]
+color = Color(0.13, 0.18, 0.15, 1)
+polygon = PackedVector2Array(-16, -14, 7, -18, 18, -3, 14, 14, -9, 18, -19, 2)
+
+[node name="Eye" type="Polygon2D" parent="BodyVisual"]
+position = Vector2(6, -4)
+color = Color(0.82, 0.05, 0.04, 1)
+polygon = PackedVector2Array(-4, -3, 4, -3, 5, 2, -3, 3)
+
+[node name="DamageArea" type="Area2D" parent="."]
+collision_layer = 0
+collision_mask = 2
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="DamageArea"]
+shape = SubResource("CircleShape2D_damage")
+
+[node name="Health" type="Node" parent="."]
+script = ExtResource("2_health")
+max_health = 55
+current_health = 55
+
+[node name="HealthIndicator" parent="." instance=ExtResource("3_health_indicator")]
+position = Vector2(0, -32)
+
+[node name="LootDropper" type="Node" parent="."]
+script = ExtResource("6_loot_dropper")
+item_ids = Array[StringName]([&"pistol_ammo"])
+drop_chances = Array[float]([1.0])
+min_quantities = Array[int]([3])
+max_quantities = Array[int]([7])
+drop_offset = Vector2(0, 0)
+spread_radius = 18.0
